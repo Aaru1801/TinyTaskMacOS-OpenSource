@@ -1,5 +1,5 @@
 
-# MiniTinyTask for macOS
+# TinyTask for macOS
 
 A tiny, no-frills macro recorder & player inspired by TinyTask, but for macOS. Records your mouse & keyboard globally and plays them back with timing.
 
