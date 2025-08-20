@@ -1,28 +1,4 @@
 #!/usr/bin/env python3
-"""
-MiniTinyTask for macOS
-A tiny, no-frills macro recorder & player inspired by TinyTask (Windows), built with Python + pynput.
-
-Features
-- Global hotkeys (F8 record toggle, F9 play, F10 save, F11 load, ESC stop playback)
-- Records mouse moves, clicks, scrolls, and key presses/releases (with timestamps)
-- Adjustable playback speed, loop count, and optional click/move jitter
-- Minimal Tkinter UI (fields for speed, loops, jitter + buttons)
-
-IMPORTANT macOS permissions
-- System Settings → Privacy & Security → Accessibility: add Terminal (or Python) and enable
-- System Settings → Privacy & Security → Input Monitoring: add Terminal (or Python) and enable
-You may need to restart Terminal (or iTerm) after enabling.
-
-Run
-- pip install pynput
-- python3 MiniTinyTask_mac.py
-
-Pack as an app (optional, not required)
-- pip install pyinstaller
-- pyinstaller --onefile --windowed MiniTinyTask_mac.py
-"""
-
 import json
 import threading
 import time
