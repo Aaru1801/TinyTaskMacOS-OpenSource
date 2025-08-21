@@ -1,51 +1,100 @@
+# MiniTinyTask (macOS)
 
-# TinyTask for macOS
+A lightweight **macro recorder and player** inspired by TinyTask, rebuilt in **Python + Tkinter** with a modern UI for macOS.  
+You can record your mouse and keyboard actions, save them as macros, replay them, and manage favorites.
 
-A tiny, no-frills macro recorder & player inspired by TinyTask, but for macOS. Records your mouse & keyboard globally and plays them back with timing.
+---
 
-## Quick start
+## ✨ Features
 
-1. **Install Python 3** (macOS usually has it; if not, install from python.org or via Homebrew).
-2. Open Terminal and run:
+- 🎥 **Record & Play** mouse + keyboard macros  
+- 💾 **Save / Load** macros as JSON  
+- ⭐ **Favorites** manager (store, replay, delete macros quickly)  
+- ⚙️ **Settings** to configure keyboard shortcuts  
+- 🎨 **Modern card-style UI** with ttk themes and custom colors  
+- ⌨️ **Unregistered global shortcuts** (safe defaults, low collision risk):  
+  - Record → `⌥⇧R` (Option+Shift+R)  
+  - Play   → `⌥⇧P` (Option+Shift+P)  
+  - Save   → `⌥⇧S`  
+  - Open   → `⌥⇧O`  
+
+---
+
+## 📦 Installation
+
+1. **Clone the repo**
    ```bash
-   python3 -m pip install pynput
+   git clone https://github.com/yourusername/minitinytask.git
+   cd minitinytask
    ```
-3. Download `MiniTinyTask_mac.py` (below) and run:
+
+2. **Install dependencies**  
+   Requires Python 3.9+.
    ```bash
-   python3 MiniTinyTask_mac.py
+   pip install -r requirements.txt
    ```
 
-## macOS permissions (required)
+   > Note: `tkinter` comes preinstalled with Python on macOS.
 
-Go to **System Settings → Privacy & Security** and enable the following for **Terminal** (or your Python app):
+3. **Run the app**
+   ```bash
+   python main.py
+   ```
 
-- **Accessibility**
-- **Input Monitoring**
+---
 
-You may need to restart Terminal (or iTerm) after enabling.
+## 🔑 Accessibility Permissions
 
-## Use
+On macOS, recording mouse and keyboard events requires:
 
-- **F8** — Start/Stop recording
-- **F9** — Play the last recording
-- **F10** — Save to JSON
-- **F11** — Load from JSON
-- **ESC** — Stop playback
+1. **System Settings → Privacy & Security → Accessibility**  
+   Add your terminal or the app’s built `.app` here.  
+2. **System Settings → Privacy & Security → Input Monitoring**  
+   Enable for the same app/terminal.  
 
-The small window lets you set:
-- **Speed x** — playback speed multiplier (e.g., 2.0 = twice as fast)
-- **Loops** — repeat count
-- **Jitter px** — optional random offset to click/move positions
+Without these, recording will not work.
 
-## Notes
+---
 
-- Movement events are throttled to keep files small but still smooth.
-- Your toggle keys (F8–F11, ESC) are **not** recorded.
-- If your function keys control brightness/volume, hold **Fn** while pressing F8/F9/etc.
-- Packaging into an app is optional:
-  ```bash
-  pip install pyinstaller
-  pyinstaller --onefile --windowed MiniTinyTask_mac.py
-  ```
+## 📁 Storage
 
-**Safety**: This app records keys system‑wide. Only run it for legitimate personal automation, and quit it when not in use.
+All user data is stored under:
+
+```
+~/.minitinytask/
+├── config.json      # stores user shortcut preferences
+└── favorites.json   # stores saved macros
+```
+
+---
+
+## 🖥️ Usage
+
+### Main Window
+
+- **Start Recording** → records a macro until stopped  
+- **Stop Recording** → ends recording  
+- **Play Macro** → replays events with current speed/loops  
+- **Add to Favorites** → save the current macro  
+- **My Favorites** → open and manage saved macros  
+- **Settings (⚙️)** → edit shortcuts  
+
+---
+
+## 📦 Packaging
+
+You can package the app into a `.app` with **PyInstaller**:
+
+```bash
+pip install pyinstaller
+pyinstaller --onefile --windowed main.py
+```
+
+This will generate a standalone macOS app under `dist/`.
+
+---
+
+## 📜 License
+
+Licensed under the **GPL-3.0-or-later**.  
+See [LICENSE](LICENSE) for details.
