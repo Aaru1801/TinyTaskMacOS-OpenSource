@@ -31,7 +31,7 @@ You can record your mouse and keyboard actions, save them as macros, replay them
 2. **Install dependencies**  
    Requires Python 3.9+.
    ```bash
-   pip install -r requirements.txt
+   pip install pynput
    ```
 
    > Note: `tkinter` comes preinstalled with Python on macOS.
