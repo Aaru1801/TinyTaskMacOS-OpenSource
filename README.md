@@ -13,10 +13,10 @@ You can record your mouse and keyboard actions, save them as macros, replay them
 - ⚙️ **Settings** to configure keyboard shortcuts  
 - 🎨 **Modern card-style UI** with ttk themes and custom colors  
 - ⌨️ **Unregistered global shortcuts** (safe defaults, low collision risk):  
-  - Record → `⌥⇧R` (Option+Shift+R)  
-  - Play   → `⌥⇧P` (Option+Shift+P)  
-  - Save   → `⌥⇧S`  
-  - Open   → `⌥⇧O`  
+  - Record       → `F3` (Fn+F3 on mac) (same to stop recording) 
+  - Play         → `F7` (Fn+F7 on mac)  
+  - Save         → `F4` (Fn+F4 on mac) 
+  - Open Saved   → `F6` (Fn+F6 on mac) 
 
 ---
 
