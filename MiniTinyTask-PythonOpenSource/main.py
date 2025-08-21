@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import threading
+import time
 from pynput import keyboard
 from models import Macro
 from recorder import Recorder
@@ -17,16 +18,66 @@ macro_ref = Macro(events=[])
 def set_status(msg: str):
     ui.set_status(msg)
 
+# ---- Control-key filtering so recorder doesn't capture our hotkeys ---------
+
+# Map "F1".."F19" to pynput Key objects
+_FKEY_TO_PYNPUT = {f"F{i}": getattr(keyboard.Key, f"f{i}") for i in range(1, 20)}
+
+# Small time window to ignore key events right after we trigger an action
+_ignore_until = 0.0
+
+def squelch(ms: int = 180):
+    """Ignore key events for a brief window (to drop the triggering F-key)."""
+    global _ignore_until
+    _ignore_until = time.time() + (ms / 1000.0)
+
+def get_control_keys():
+    """Return a set of pynput Key objects for the UI's current F-key bindings."""
+    try:
+        return {
+            _FKEY_TO_PYNPUT.get(ui.keys["record"]),
+            _FKEY_TO_PYNPUT.get(ui.keys["play"]),
+            _FKEY_TO_PYNPUT.get(ui.keys["save"]),
+            _FKEY_TO_PYNPUT.get(ui.keys["open"]),
+        } - {None}
+    except Exception:
+        # Fallback to defaults if UI not ready
+        return {
+            keyboard.Key.f3,
+            keyboard.Key.f7,
+            keyboard.Key.f4,
+            keyboard.Key.f6,
+        }
+
+def should_ignore_key(k) -> bool:
+    """Predicate you can wire into Recorder if supported."""
+    if time.time() < _ignore_until:
+        return True
+    try:
+        return k in get_control_keys()
+    except Exception:
+        return False
+
 # ---- UI callbacks -------------------------------------------------------------
 
 def start_rec():
+    squelch()
     if player.playing:
         set_status("Can't record during playback.")
         return
+    # Best-effort: hand our ignore info to Recorder if it supports it
+    if hasattr(rec, "ignore_keys"):
+        rec.ignore_keys = get_control_keys()
+    if hasattr(rec, "set_key_filter"):
+        try:
+            rec.set_key_filter(should_ignore_key)
+        except Exception:
+            pass
     rec.start()
     set_status("Recording... (F8 to stop)")
 
 def stop_rec():
+    squelch()
     rec.stop()
     # refresh reference
     global macro_ref
@@ -34,6 +85,7 @@ def stop_rec():
     set_status(f"Recorded {len(macro_ref.events)} events.")
 
 def play(speed: float, loops: int, jitter: int):
+    squelch()
     if rec.recording:
         set_status("Stop recording first.")
         return
@@ -52,6 +104,7 @@ def play(speed: float, loops: int, jitter: int):
     threading.Thread(target=run, daemon=True).start()
 
 def stop_play():
+    squelch()
     player.stop()
     set_status("Stopping playback...")
 
@@ -86,20 +139,33 @@ ui = AppUI(
     on_prefs=on_prefs,     # 👈 here
 )
 
-# ---- Global Hotkeys -----------------------------------------------------------
+# ---- Global Hotkeys (use UI-configured F-keys) ------------------------------
 
-hotkeys = keyboard.GlobalHotKeys({
-    '<f8>': lambda: (stop_rec() if rec.recording else start_rec()),
-    '<f9>': lambda: play(
+def _ghk(label: str) -> str:
+    """
+    Convert 'F7' -> '<f7>' for GlobalHotKeys.
+    """
+    return f"<{label.lower()}>"
+
+_bindings = {
+    _ghk(ui.keys["record"]): lambda: (stop_rec() if rec.recording else start_rec()),
+    _ghk(ui.keys["play"]):   lambda: play(
         speed=float(ui.speed_var.get() or "1.0"),
         loops=int(ui.loops_var.get() or "1"),
         jitter=int(ui.jitter_var.get() or "0"),
     ),
-    '<f10>': ui._save,
-    '<f11>': ui._load,
-    '<esc>': stop_play,
-})
+    _ghk(ui.keys["save"]):   ui._save,
+    _ghk(ui.keys["open"]):   ui._load,
+    '<esc>':                 stop_play,
+}
+
+hotkeys = keyboard.GlobalHotKeys(_bindings)
 hotkeys.start()
+
+# NOTE: If your Recorder implementation supports it, consider using:
+#   rec.ignore_keys = get_control_keys()
+#   rec.set_key_filter(should_ignore_key)
+# to ensure UI control keys are never recorded.
 
 # ---- Entry point --------------------------------------------------------------
 
