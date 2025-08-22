@@ -13,14 +13,28 @@ You can record your mouse and keyboard actions, save them as macros, replay them
 - ⚙️ **Settings** to configure keyboard shortcuts  
 - 🎨 **Modern card-style UI** with ttk themes and custom colors  
 - ⌨️ **Unregistered global shortcuts** (safe defaults, low collision risk):  
-  - Record       → `F3` (Fn+F3 on mac) (same to stop recording) 
+  - Record       → `F3` (Fn+F3 on mac) (same to stop recording)  
   - Play         → `F7` (Fn+F7 on mac)  
-  - Save         → `F4` (Fn+F4 on mac) 
-  - Open Saved   → `F6` (Fn+F6 on mac) 
+  - Save         → `F4` (Fn+F4 on mac)  
+  - Open Saved   → `F6` (Fn+F6 on mac)  
 
 ---
 
-## 📦 Installation
+## 📥 Download (Recommended for Users)
+
+Grab the latest version from [Releases](https://github.com/Aaru1801/TinyTaskMacOS-OpenSource/releases/latest).
+
+### macOS Installation
+1. Download the **TinyTask-MacOS.dmg** from the Assets.  
+2. Open the DMG and drag **TinyTask-MacOS.app** into your **Applications** folder.  
+3. On first launch, right-click → **Open** (to bypass Gatekeeper warning).  
+4. Grant **Accessibility** & **Input Monitoring** when prompted.  
+
+✅ That’s it! You’re ready to record and play macros.
+
+---
+
+## 📦 Development Setup (For Contributors)
 
 1. **Clone the repo**
    ```bash
@@ -71,7 +85,6 @@ All user data is stored under:
 ## 🖥️ Usage
 
 ### Main Window
-
 - **Start Recording** → records a macro until stopped  
 - **Stop Recording** → ends recording  
 - **Play Macro** → replays events with current speed/loops  
@@ -81,7 +94,7 @@ All user data is stored under:
 
 ---
 
-## 📦 Packaging
+## 📦 Packaging (For Developers)
 
 You can package the app into a `.app` with **PyInstaller**:
 
