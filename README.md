@@ -1,7 +1,7 @@
 # MiniTinyTask (macOS)
 
 A lightweight **macro recorder and player** inspired by TinyTask, rebuilt in **Python + Tkinter** with a modern UI for macOS.  
-You can record your mouse and keyboard actions, save them as macros, replay them, and manage favorites.
+You can record your mouse and keyboard actions, save them as macros, replay them, and manage favorites. Made with the help of ChatGPT
 
 ---
 
