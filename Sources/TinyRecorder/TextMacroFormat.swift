@@ -103,7 +103,7 @@ enum TextMacroFormat {
                 let sp = line.firstIndex(of: " ") ?? line.firstIndex(of: "\t")
                 if let sp {
                     let tStr = String(line[line.index(after: line.startIndex)..<sp])
-                    explicitTime = TimeInterval(tStr)
+                    explicitTime = Self.finiteTime(tStr)
                     line = String(line[sp...]).trimmingCharacters(in: .whitespaces)
                 }
             }
@@ -119,8 +119,8 @@ enum TextMacroFormat {
                     implicitTime = ev.time
                 } else {
                     // WAIT: advance the implicit clock, emit nothing.
-                    if verb == "WAIT", let ms = Double(args.first ?? "") {
-                        implicitTime = t + ms / 1000.0
+                    if verb == "WAIT", let ms = Double(args.first ?? ""), ms.isFinite {
+                        implicitTime = t + max(0, ms) / 1000.0
                     }
                 }
                 if let et = explicitTime { implicitTime = max(implicitTime, et) }
@@ -142,7 +142,7 @@ enum TextMacroFormat {
 
     private static func parseLine(verb: String, args: [String], time: TimeInterval) throws -> RecordedEvent? {
         func num(_ i: Int) throws -> CGFloat {
-            guard i < args.count, let v = Double(args[i]) else { throw ParseError.bad }
+            guard i < args.count, let v = Double(args[i]), v.isFinite else { throw ParseError.bad }
             return CGFloat(v)
         }
         func button(_ s: String) -> (RecordedEvent.Kind, RecordedEvent.Kind, RecordedEvent.Kind, Int64) {
@@ -194,6 +194,12 @@ enum TextMacroFormat {
         default:
             throw ParseError.bad
         }
+    }
+
+    /// Parse a seconds value, rejecting NaN/±inf and clamping negatives to 0.
+    private static func finiteTime(_ s: String) -> TimeInterval? {
+        guard let v = TimeInterval(s), v.isFinite else { return nil }
+        return max(0, v)
     }
 
     private static func parseHex(_ s: String) -> UInt64 {

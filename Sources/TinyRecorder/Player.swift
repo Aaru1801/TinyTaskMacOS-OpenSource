@@ -52,8 +52,11 @@ final class Player: ObservableObject {
                     let target = wallStart + (event.time / speed)
                     let now = CFAbsoluteTimeGetCurrent()
                     let delay = target - now
-                    if delay > 0 {
-                        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    // Guard non-finite / absurd delays from corrupt or hostile macro data:
+                    // UInt64(inf) traps, UInt64(huge) overflows, and a giant finite delay
+                    // would hang. Non-finite (inf/NaN) fails `.isFinite` and posts immediately.
+                    if delay > 0, delay.isFinite {
+                        try? await Task.sleep(nanoseconds: UInt64(min(delay, 3600) * 1_000_000_000))
                     }
                     if Task.isCancelled { break outer }
                     Player.post(event)
@@ -102,8 +105,8 @@ final class Player: ObservableObject {
             for event in events {
                 let target = wallStart + (event.time / speed)
                 let delay = target - CFAbsoluteTimeGetCurrent()
-                if delay > 0 {
-                    Thread.sleep(forTimeInterval: delay)
+                if delay > 0, delay.isFinite {
+                    Thread.sleep(forTimeInterval: min(delay, 3600))
                 }
                 Player.post(event)
             }
