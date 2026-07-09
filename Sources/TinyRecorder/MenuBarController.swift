@@ -627,7 +627,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let panel = NSSavePanel()
         panel.title = "Export as Text"
         let baseName = library.currentMacro?.name ?? defaultMacroName()
-        panel.nameFieldStringValue = baseName + ".txt"
+        panel.nameFieldStringValue = safeFileName(baseName) + ".txt"
         if let ut = UTType(filenameExtension: "txt") {
             panel.allowedContentTypes = [ut]
         }
@@ -639,6 +639,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             do {
                 let text = TextMacroFormat.export(self.recorder.events)
                 try text.write(to: url, atomically: true, encoding: .utf8)
+                self.restrictPermissions(url)
                 self.state.statusMessage = "Exported \(url.lastPathComponent)."
             } catch {
                 self.state.statusMessage = "Export failed: \(error.localizedDescription)"
@@ -651,7 +652,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard let macro = library.macros.first(where: { $0.id == id }) else { return }
         let panel = NSSavePanel()
         panel.title = "Export \(macro.name) as Text"
-        panel.nameFieldStringValue = macro.name + ".txt"
+        panel.nameFieldStringValue = safeFileName(macro.name) + ".txt"
         if let ut = UTType(filenameExtension: "txt") {
             panel.allowedContentTypes = [ut]
         }
@@ -662,6 +663,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             do {
                 let text = TextMacroFormat.export(macro.events)
                 try text.write(to: url, atomically: true, encoding: .utf8)
+                self.restrictPermissions(url)
                 self.state.statusMessage = "Exported \(url.lastPathComponent)."
             } catch {
                 self.state.statusMessage = "Export failed: \(error.localizedDescription)"
@@ -688,6 +690,32 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         }
     }
 
+    // MARK: - Export helpers
+
+    /// Strip path separators and leading dots so a macro name can't traverse
+    /// directories or hide the exported file when used as a suggested filename.
+    private func safeFileName(_ name: String) -> String {
+        let cleaned = name
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        let unhidden = String(cleaned.drop(while: { $0 == "." }))
+        let trimmed = unhidden.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "macro" : trimmed
+    }
+
+    /// POSIX single-quote a string for safe embedding in a generated shell script.
+    private func shellQuote(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// Exported macros can contain recorded keystrokes (incl. passwords); keep the
+    /// files owner-only so other local users can't read them. `.command` also
+    /// needs the execute bit, so 0700 there instead of 0600.
+    private func restrictPermissions(_ url: URL, executable: Bool = false) {
+        let mode = executable ? 0o700 : 0o600
+        try? FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
+    }
+
     func exportAsScript() {
         guard !recorder.events.isEmpty else {
             state.statusMessage = "Nothing to export."
@@ -696,7 +724,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let panel = NSSavePanel()
         panel.title = "Export as Shell Script"
         let baseName = library.currentMacro?.name ?? defaultMacroName()
-        panel.nameFieldStringValue = baseName + ".command"
+        panel.nameFieldStringValue = safeFileName(baseName) + ".command"
         if let ut = UTType(filenameExtension: "command") {
             panel.allowedContentTypes = [ut]
         }
@@ -724,7 +752,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 let script = """
                 #!/bin/bash
                 # TinyRecorder self-running macro
-                EXEC="\(exec)"
+                EXEC=\(self.shellQuote(exec))
                 if [ ! -x "$EXEC" ]; then
                     echo "TinyRecorder binary not found at $EXEC. Please install TinyRecorder."
                     exit 1
@@ -735,7 +763,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 rm -f "$TMP"
                 """
                 try script.write(to: url, atomically: true, encoding: .utf8)
-                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+                self.restrictPermissions(url, executable: true)
                 self.state.statusMessage = "Exported \(url.lastPathComponent)."
             } catch {
                 self.state.statusMessage = "Export failed: \(error.localizedDescription)"
@@ -748,7 +776,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard let macro = library.macros.first(where: { $0.id == id }) else { return }
         let panel = NSSavePanel()
         panel.title = "Export \(macro.name)"
-        panel.nameFieldStringValue = macro.name + ".tinyrec"
+        panel.nameFieldStringValue = safeFileName(macro.name) + ".tinyrec"
         if let ut = UTType(filenameExtension: "tinyrec") {
             panel.allowedContentTypes = [ut]
         }
@@ -761,6 +789,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 enc.outputFormatting = [.prettyPrinted]
                 let data = try enc.encode(macro)
                 try data.write(to: url)
+                self.restrictPermissions(url)
                 self.state.statusMessage = "Exported \(url.lastPathComponent)."
             } catch {
                 self.state.statusMessage = "Export failed: \(error.localizedDescription)"
