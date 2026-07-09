@@ -199,6 +199,7 @@ struct PopoverContentView: View {
             .padding(.top, 12)
             .padding(.bottom, 8)
 
+            #if !HIDE_PERMISSION_BANNER
             if !state.accessibilityGranted || !state.inputMonitoringGranted {
                 PermissionBanner(
                     controller: controller,
@@ -209,6 +210,7 @@ struct PopoverContentView: View {
                 .padding(.bottom, 8)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
+            #endif
 
             if !visibleSelection.isEmpty {
                 SelectionToolbar(
@@ -1447,6 +1449,9 @@ private struct FooterRow: View {
 
 // MARK: - Permission banner
 
+// Compiled out of "ship" builds via -DHIDE_PERMISSION_BANNER (see build.sh
+// TINYRECORDER_SWIFT_FLAGS); normal builds always include it.
+#if !HIDE_PERMISSION_BANNER
 private struct PermissionBanner: View {
     let controller: MenuBarController
     let accessibilityGranted: Bool
@@ -1491,6 +1496,7 @@ private struct PermissionBanner: View {
         )
     }
 }
+#endif
 
 // MARK: - Loop chip
 

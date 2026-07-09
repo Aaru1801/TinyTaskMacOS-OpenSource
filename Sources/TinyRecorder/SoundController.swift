@@ -22,18 +22,27 @@ enum SoundCue {
     }
 }
 
-final class SoundController {
+final class SoundController: NSObject, NSSoundDelegate {
     static let shared = SoundController()
-    private init() {}
+    private override init() {}
 
     var enabled: Bool = false
 
+    /// NSSound.play() is asynchronous; if the instance deallocates before it
+    /// finishes, the cue is silently cut off. Hold a reference until it completes.
+    private var active: [NSSound] = []
+
     func play(_ cue: SoundCue) {
         guard enabled else { return }
-        // NSSound named with system sounds.
         if let s = NSSound(named: NSSound.Name(cue.systemSoundName)) {
             s.volume = 0.45
+            s.delegate = self
+            active.append(s)
             s.play()
         }
+    }
+
+    func sound(_ sound: NSSound, didFinishPlaying finished: Bool) {
+        active.removeAll { $0 === sound }
     }
 }

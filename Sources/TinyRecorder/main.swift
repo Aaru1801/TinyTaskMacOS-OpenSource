@@ -102,10 +102,15 @@ if args.count >= 4, args[1] == "--convert" {
 // Single-instance guard: a second copy would double-register Carbon hotkeys,
 // run a second event tap, and clobber library.json last-writer-wins.
 let myPID = ProcessInfo.processInfo.processIdentifier
+let myExec = Bundle.main.executableURL?.resolvingSymlinksInPath()
 let twin = NSWorkspace.shared.runningApplications.first { app in
-    app.processIdentifier != myPID &&
-    (app.bundleIdentifier == "com.tinyrecorder.app" ||
-     app.executableURL?.lastPathComponent == "TinyRecorder")
+    guard app.processIdentifier != myPID else { return false }
+    // Our shipped bundle, or a bundle-less dev build running the *same* binary.
+    // Matching only on the executable *name* would clobber any unrelated tool
+    // that happens to be called "TinyRecorder".
+    if app.bundleIdentifier == "com.tinyrecorder.app" { return true }
+    return app.bundleIdentifier == nil
+        && app.executableURL?.resolvingSymlinksInPath() == myExec
 }
 if let twin {
     twin.activate()

@@ -19,8 +19,11 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="${ROOT}/.build/release"
 STAGE="${ROOT}/.build/${APP_NAME}.app"        # assembled here first (gitignored)
 # Install location can be overridden (e.g. to build a one-off copy on the Desktop
-# without disturbing the /Applications install).
+# without disturbing the /Applications install). Expand a leading ~ ourselves —
+# parameter expansion does not, and an unexpanded ~ would create a literal "~"
+# directory that later rm -rf / cp target by mistake.
 INSTALL_DIR="${TINYRECORDER_INSTALL_DIR:-/Applications}"
+INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
 APP_BUNDLE="${INSTALL_DIR}/${APP_NAME}.app"   # final location
 CONTENTS="${STAGE}/Contents"
 
@@ -61,13 +64,16 @@ cp -R "$STAGE" "$APP_BUNDLE"
 # Sign the bundle, stripping extended attributes first. Writing into a
 # Finder-watched dir (e.g. ~/Desktop) can race in com.apple.FinderInfo/macl that
 # codesign rejects as "detritus", so clear-then-sign with one retry.
-#   $1 = extra codesign flags (may be empty), $2 = identity ("-" for ad-hoc)
+#   sign_app <identity> [extra codesign flags...]   (identity "-" = ad-hoc)
+# Flags are passed as separate positional args and forwarded via "$@", so each is
+# quoted correctly even if it ever contains a path with spaces.
 sign_app() {
+    local id="$1"; shift
     xattr -cr "$APP_BUNDLE" 2>/dev/null || true
-    if ! codesign --force $1 --sign "$2" "$APP_BUNDLE" 2>/dev/null; then
+    if ! codesign --force "$@" --sign "$id" "$APP_BUNDLE" 2>/dev/null; then
         echo "  …xattr race; clearing and retrying"
         xattr -cr "$APP_BUNDLE" 2>/dev/null || true
-        codesign --force $1 --sign "$2" "$APP_BUNDLE"
+        codesign --force "$@" --sign "$id" "$APP_BUNDLE"
     fi
 }
 
@@ -95,17 +101,17 @@ if [ -n "$SIGN_ID" ]; then
     case "$SIGN_ID" in
         *"Developer ID"*)
             echo "→ Signing with Developer ID (hardened runtime): ${SIGN_ID}"
-            sign_app "--options runtime --timestamp" "$SIGN_ID"
+            sign_app "$SIGN_ID" --options runtime --timestamp
             ;;
         *)
             echo "→ Signing with stable identity (TCC grants persist): ${SIGN_ID}"
-            sign_app "" "$SIGN_ID"
+            sign_app "$SIGN_ID"
             ;;
     esac
     SIGNED_WITH="$SIGN_ID"
 else
     echo "→ No signing identity found — ad-hoc signing (permissions re-prompt per rebuild)."
-    sign_app "" "-"
+    sign_app "-"
     SIGNED_WITH="ad-hoc"
 fi
 

@@ -14,7 +14,10 @@
 # After that, just run: ./notarize.sh
 set -euo pipefail
 
-APP="/Applications/TinyRecorder.app"
+# Honor the same install-dir override build.sh uses (expand a leading ~).
+INSTALL_DIR="${TINYRECORDER_INSTALL_DIR:-/Applications}"
+INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
+APP="${INSTALL_DIR}/TinyRecorder.app"
 PROFILE="tinyrecorder-notary"
 ZIP="$(mktemp -d)/TinyRecorder.zip"
 
