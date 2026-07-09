@@ -175,27 +175,51 @@ final class MacroLibrary: ObservableObject {
         return base.appendingPathComponent("library.json")
     }
 
+    /// False when a library.json exists on disk that we could not read or decode.
+    /// While false, save() refuses to run so we never overwrite the user's only
+    /// copy of their data with the empty in-memory library.
+    private var loadedCleanly = true
+
     init() { load() }
 
     // MARK: - Persistence
 
     func load() {
-        guard let data = try? Data(contentsOf: Self.fileURL) else { return }
+        let url = Self.fileURL
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            loadedCleanly = true   // no file yet — a fresh, empty library is expected
+            return
+        }
+        guard let data = try? Data(contentsOf: url) else {
+            // Exists but unreadable (permissions, transient I/O). Don't let a later
+            // save() clobber it — the data may be fine, we just can't read it now.
+            loadedCleanly = false
+            NSLog("TinyRecorder: library.json exists but could not be read — refusing to overwrite it.")
+            return
+        }
         guard let decoded = try? JSONDecoder().decode(LibraryData.self, from: data) else {
-            // The file exists but won't parse. Preserve it before any future
-            // save() overwrites the user's entire library with an empty one.
+            // Corrupt: preserve a copy before anything overwrites it, and only allow
+            // future saves if that backup actually succeeded.
             let stamp = Int(Date().timeIntervalSince1970)
-            let backup = Self.fileURL.deletingLastPathComponent()
+            let backup = url.deletingLastPathComponent()
                 .appendingPathComponent("library.corrupt-\(stamp).json")
-            try? FileManager.default.copyItem(at: Self.fileURL, to: backup)
-            NSLog("TinyRecorder: library.json failed to decode — backed up to \(backup.lastPathComponent)")
+            let backedUp = ((try? FileManager.default.copyItem(at: url, to: backup)) != nil)
+            loadedCleanly = backedUp
+            NSLog("TinyRecorder: library.json failed to decode — " +
+                  (backedUp ? "backed up to \(backup.lastPathComponent)."
+                            : "BACKUP FAILED; refusing to overwrite the original."))
             return
         }
         self.macros = decoded.macros
         self.currentMacroID = decoded.currentMacroID
+        loadedCleanly = true
     }
 
     func save() {
+        guard loadedCleanly else {
+            NSLog("TinyRecorder: skipping save to avoid overwriting an unreadable library.json.")
+            return
+        }
         let data = LibraryData(macros: macros, currentMacroID: currentMacroID)
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted]

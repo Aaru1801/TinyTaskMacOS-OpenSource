@@ -73,7 +73,12 @@ struct EditorView: View {
                     macro: library.currentMacro,
                     rowCount: recorder.events.count,
                     duration: recorder.events.last?.time ?? 0,
-                    hideMouseMoves: $hideMouseMoves,
+                    // Toggling the filter changes which rows exist; drop the selection
+                    // so stale indices can't delete now-hidden events or break shift-range.
+                    hideMouseMoves: Binding(
+                        get: { hideMouseMoves },
+                        set: { hideMouseMoves = $0; selection.removeAll() }
+                    ),
                     onPlay:    { controller.play() },
                     onStop:    { controller.stopAll() },
                     onExport:  { controller.exportAsScript() },
