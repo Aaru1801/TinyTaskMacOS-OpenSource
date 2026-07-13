@@ -67,6 +67,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainWindow?.show()
     }
 
+    /// The library advertises ⌘K; wire it through the responder chain so it
+    /// reliably focuses the SwiftUI search field in the Dock window.
+    @objc func focusLibrarySearch(_ sender: Any?) {
+        showMainWindow(nil)
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: MenuBarController.focusSearchNotification, object: nil)
+        }
+    }
+
     // MARK: - File menu actions
 
     @objc func newRecording(_ sender: Any?) {
@@ -180,6 +189,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         expText.keyEquivalentModifierMask = [.command, .shift]
         expText.target = self
         fileMenu.addItem(expText)
+        fileMenu.addItem(.separator())
+        let search = NSMenuItem(title: "Search Library", action: #selector(focusLibrarySearch(_:)), keyEquivalent: "k")
+        search.target = self
+        fileMenu.addItem(search)
         fileMenu.addItem(.separator())
         fileMenu.addItem(NSMenuItem(
             title: "Close Window",

@@ -53,6 +53,24 @@ struct RecordedEvent: Codable, Equatable {
         get { CGPoint(x: x, y: y) }
         set { x = newValue.x; y = newValue.y }
     }
+
+    /// Bring externally supplied event lists into the same shape as a fresh
+    /// recording. Native macro files are user-editable JSON, so their timeline
+    /// is not guaranteed to be sorted or even non-negative.
+    static func normalized(_ events: [RecordedEvent]) -> [RecordedEvent] {
+        events.enumerated().compactMap { offset, event -> (Int, RecordedEvent)? in
+            guard event.time.isFinite else { return nil }
+            var event = event
+            event.time = max(0, event.time)
+            if !event.x.isFinite { event.x = 0 }
+            if !event.y.isFinite { event.y = 0 }
+            return (offset, event)
+        }
+        .sorted { lhs, rhs in
+            lhs.1.time == rhs.1.time ? lhs.0 < rhs.0 : lhs.1.time < rhs.1.time
+        }
+        .map(\.1)
+    }
 }
 
 struct Macro: Codable {

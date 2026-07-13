@@ -100,12 +100,21 @@ enum TextMacroFormat {
             // Optional @time prefix.
             var explicitTime: TimeInterval?
             if line.hasPrefix("@") {
-                let sp = line.firstIndex(of: " ") ?? line.firstIndex(of: "\t")
-                if let sp {
-                    let tStr = String(line[line.index(after: line.startIndex)..<sp])
-                    explicitTime = Self.finiteTime(tStr)
-                    line = String(line[sp...]).trimmingCharacters(in: .whitespaces)
+                // Find whichever whitespace delimiter comes first. Looking for
+                // a space before a tab made `@0.1\tMOVE 1 2` consume "MOVE" as
+                // part of the timestamp. An invalid explicit time is a bad line,
+                // not an implicit-time event.
+                guard let boundary = line.firstIndex(where: { $0 == " " || $0 == "\t" }) else {
+                    skipped += 1
+                    continue
                 }
+                let tStr = String(line[line.index(after: line.startIndex)..<boundary])
+                guard let parsedTime = Self.finiteTime(tStr) else {
+                    skipped += 1
+                    continue
+                }
+                explicitTime = parsedTime
+                line = String(line[boundary...]).trimmingCharacters(in: .whitespaces)
             }
 
             let tokens = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
@@ -133,8 +142,9 @@ enum TextMacroFormat {
         guard !events.isEmpty else {
             throw MacroImportError.notTextFormat("no events found.")
         }
-        // Ensure non-decreasing, normalized timeline.
-        events.sort { $0.time < $1.time }
+        // Ensure a finite, non-decreasing timeline while preserving input order
+        // for events with identical timestamps (e.g. a click pair).
+        events = RecordedEvent.normalized(events)
         return MacroImportResult(events: events, parsed: events.count, skipped: skipped, warning: nil)
     }
 

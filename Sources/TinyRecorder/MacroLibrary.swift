@@ -210,8 +210,15 @@ final class MacroLibrary: ObservableObject {
                             : "BACKUP FAILED; refusing to overwrite the original."))
             return
         }
-        self.macros = decoded.macros
-        self.currentMacroID = decoded.currentMacroID
+        self.macros = decoded.macros.map { macro in
+            var macro = macro
+            macro.events = RecordedEvent.normalized(macro.events)
+            macro.speed = max(0.1, min(10.0, macro.speed))
+            return macro
+        }
+        self.currentMacroID = decoded.currentMacroID.flatMap { id in
+            macros.contains(where: { $0.id == id }) ? id : nil
+        }
         loadedCleanly = true
     }
 
@@ -231,6 +238,9 @@ final class MacroLibrary: ObservableObject {
 
     /// Insert a fully-built macro (used by importers to preserve metadata).
     func insert(_ macro: SavedMacro) {
+        var macro = macro
+        macro.events = RecordedEvent.normalized(macro.events)
+        macro.speed = max(0.1, min(10.0, macro.speed))
         macros.insert(macro, at: 0)
         currentMacroID = macro.id
         save()
@@ -239,7 +249,7 @@ final class MacroLibrary: ObservableObject {
     @discardableResult
     func add(events: [RecordedEvent], name: String? = nil, loops: Int = 1) -> SavedMacro {
         let n = (name?.isEmpty == false) ? name! : autoName()
-        let m = SavedMacro(name: n, events: events, loops: loops)
+        let m = SavedMacro(name: n, events: RecordedEvent.normalized(events), loops: loops)
         macros.insert(m, at: insertionIndex())
         currentMacroID = m.id
         save()
@@ -319,7 +329,7 @@ final class MacroLibrary: ObservableObject {
 
     func updateEvents(id: UUID, events: [RecordedEvent]) {
         mutate(id) {
-            $0.events = events
+            $0.events = RecordedEvent.normalized(events)
         }
     }
 
@@ -383,7 +393,8 @@ final class MacroLibrary: ObservableObject {
     func move(id: UUID, before targetID: UUID) {
         guard let from = macros.firstIndex(where: { $0.id == id }),
               let to = macros.firstIndex(where: { $0.id == targetID }),
-              from != to else { return }
+              from != to,
+              macros[from].favorite == macros[to].favorite else { return }
         let macro = macros.remove(at: from)
         let insertAt = (from < to) ? to - 1 : to
         macros.insert(macro, at: insertAt)

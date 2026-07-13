@@ -17,9 +17,11 @@ final class Player: ObservableObject {
 
     /// Play the macro `loops` times. Pass `loops <= 0` for continuous (infinite) playback,
     /// which only stops on `stop()` or the configured stop hotkey.
-    /// The completion receives `true` only when playback ran to natural completion —
-    /// `false` for cancellation, so callers can skip chains/stats/sounds on abort.
+    /// The completion receives `true` only when playback ran to natural completion.
+    /// A superseded/cancelled generation stays silent, so it cannot affect a newer
+    /// playback run's state.
     func play(events: [RecordedEvent], loops: Int = 1, speed: Double = 1.0, completion: ((Bool) -> Void)? = nil) {
+        let events = RecordedEvent.normalized(events)
         guard !isPlaying, !events.isEmpty else { completion?(false); return }
         let infinite = (loops <= 0)
         let total = infinite ? 0 : max(1, loops)
@@ -71,14 +73,15 @@ final class Player: ObservableObject {
                 }
             }
             await MainActor.run {
-                // Evaluate on the main actor so it's serialized with stop().
+                // A cancelled, superseded run must not call its completion: a
+                // controller may already have started a newer macro, and the old
+                // completion could otherwise clear its chain/stat bookkeeping.
+                guard self.generation == gen else { return }
                 let finished = !Task.isCancelled
-                if self.generation == gen {
-                    self.isPlaying = false
-                    self.progress = 0
-                    self.currentLoop = 0
-                    self.totalLoops = 1
-                }
+                self.isPlaying = false
+                self.progress = 0
+                self.currentLoop = 0
+                self.totalLoops = 1
                 completion?(finished)
             }
         }
@@ -97,6 +100,7 @@ final class Player: ObservableObject {
     /// Synchronous playback for CLI mode — no MainActor hops, no published state.
     /// Blocks the calling (background) thread until done.
     static func playSynchronously(events: [RecordedEvent], loops: Int, speed: Double) {
+        let events = RecordedEvent.normalized(events)
         guard !events.isEmpty else { return }
         let speed = max(0.1, min(speed, 10.0))
         let total = max(1, loops)
@@ -144,7 +148,9 @@ final class Player: ObservableObject {
         case .scrollWheel:
             if let cgEvent = CGEvent(
                 scrollWheelEvent2Source: nil,
-                units: .pixel,
+                // Recorder stores legacy scroll-delta axes, whose units are
+                // lines. Replaying them as pixels made wheel macros too small.
+                units: .line,
                 wheelCount: 2,
                 wheel1: ev.scrollDeltaY,
                 wheel2: ev.scrollDeltaX,

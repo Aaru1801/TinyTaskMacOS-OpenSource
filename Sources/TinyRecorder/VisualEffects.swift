@@ -165,6 +165,14 @@ extension View {
     func cardSurface(cornerRadius: CGFloat = 12) -> some View {
         modifier(CardSurface(cornerRadius: cornerRadius))
     }
+
+    /// Pointer-aware depth shared by the app's interactive surfaces. The view
+    /// tilts toward the cursor, lifts, catches a soft specular highlight, and
+    /// casts a deeper contact shadow. `intensity` lets tiny controls stay crisp
+    /// while cards use a broader, slower motion.
+    func interactiveLift3D(intensity: CGFloat = 1, cornerRadius: CGFloat = 8) -> some View {
+        modifier(InteractiveLift3D(intensity: intensity, cornerRadius: cornerRadius))
+    }
 }
 
 private struct CardSurface: ViewModifier {
@@ -182,20 +190,112 @@ private struct CardSurface: ViewModifier {
     }
 }
 
-// MARK: - Hoverable button style (used on round action buttons)
+// MARK: - Pointer-aware 3D interaction
+
+private struct InteractiveLift3D: ViewModifier {
+    let intensity: CGFloat
+    let cornerRadius: CGFloat
+
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovered = false
+    @State private var pointer = CGPoint.zero
+    @State private var surfaceSize = CGSize.zero
+
+    private var visuallyActive: Bool { hovered && isEnabled }
+    private var motionActive: Bool { visuallyActive && !reduceMotion }
+
+    private var normalizedX: CGFloat {
+        guard surfaceSize.width > 0 else { return 0 }
+        return max(-1, min(1, (pointer.x / surfaceSize.width - 0.5) * 2))
+    }
+
+    private var normalizedY: CGFloat {
+        guard surfaceSize.height > 0 else { return 0 }
+        return max(-1, min(1, (pointer.y / surfaceSize.height - 0.5) * 2))
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear { surfaceSize = proxy.size }
+                        .onChange(of: proxy.size) { _, newSize in surfaceSize = newSize }
+                }
+            )
+            .scaleEffect(motionActive ? 1 + 0.022 * intensity : 1)
+            .rotation3DEffect(
+                .degrees(motionActive ? Double(-normalizedY * 4.2 * intensity) : 0),
+                axis: (x: 1, y: 0, z: 0),
+                anchor: .center,
+                perspective: 0.72
+            )
+            .rotation3DEffect(
+                .degrees(motionActive ? Double(normalizedX * 5.0 * intensity) : 0),
+                axis: (x: 0, y: 1, z: 0),
+                anchor: .center,
+                perspective: 0.72
+            )
+            .rotationEffect(.degrees(motionActive ? Double(normalizedX * 0.35 * intensity) : 0))
+            .offset(y: motionActive ? -2.0 * intensity : 0)
+            .brightness(visuallyActive ? 0.025 * intensity : 0)
+            .contrast(visuallyActive ? 1.015 : 1)
+            .shadow(
+                color: .black.opacity(visuallyActive ? 0.22 * intensity : 0),
+                radius: visuallyActive ? 7 * intensity : 0,
+                x: motionActive ? normalizedX * -1.5 * intensity : 0,
+                y: visuallyActive ? 4 * intensity : 0
+            )
+            .shadow(
+                color: .white.opacity(visuallyActive ? 0.10 * intensity : 0),
+                radius: visuallyActive ? 1.5 * intensity : 0,
+                x: motionActive ? normalizedX * intensity : 0,
+                y: visuallyActive ? -1 * intensity : 0
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [.white.opacity(0.13), .white.opacity(0.025), .clear],
+                            startPoint: UnitPoint(
+                                x: max(0, min(1, 0.28 + normalizedX * 0.18)),
+                                y: max(0, min(1, 0.08 + normalizedY * 0.12))
+                            ),
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .opacity(visuallyActive ? intensity : 0)
+                    .blendMode(.screen)
+                    .allowsHitTesting(false)
+            }
+            .zIndex(visuallyActive ? 20 : 0)
+            .animation(.spring(response: 0.32, dampingFraction: 0.68), value: hovered)
+            .animation(.easeOut(duration: 0.075), value: pointer)
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let location):
+                    pointer = location
+                    hovered = isEnabled
+                case .ended:
+                    hovered = false
+                    pointer = CGPoint(x: surfaceSize.width / 2, y: surfaceSize.height / 2)
+                }
+            }
+    }
+}
+
+// MARK: - Press response (paired with interactiveLift3D)
 
 struct HoverPressButtonStyle: ButtonStyle {
-    @State private var hovered = false
-    var hoverScale: CGFloat = 1.05
     var pressScale: CGFloat = 0.96
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? pressScale : (hovered ? hoverScale : 1.0))
-            .brightness(hovered && !configuration.isPressed ? 0.04 : 0)
-            .animation(.spring(response: 0.28, dampingFraction: 0.7), value: hovered)
-            .animation(.spring(response: 0.16, dampingFraction: 0.6), value: configuration.isPressed)
-            .onHover { hovered = $0 }
+            .scaleEffect(configuration.isPressed ? pressScale : 1)
+            .offset(y: configuration.isPressed ? 1 : 0)
+            .brightness(configuration.isPressed ? -0.035 : 0)
+            .animation(.spring(response: 0.15, dampingFraction: 0.62), value: configuration.isPressed)
     }
 }
 

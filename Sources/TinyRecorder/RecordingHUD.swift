@@ -134,27 +134,12 @@ struct RecordingHUDView: View {
         String(format: "%02d", Int((recorder.liveDuration - floor(recorder.liveDuration)) * 100))
     }
 
-    /// Single pass over the buffer instead of four filters per render.
-    private var stats: (clicks: Int, keys: Int, scrolls: Int, drags: Int) {
-        var clicks = 0, keys = 0, scrolls = 0, drags = 0
-        for ev in recorder.events {
-            switch ev.kind {
-            case .leftMouseDown, .rightMouseDown, .otherMouseDown: clicks += 1
-            case .keyDown: keys += 1
-            case .scrollWheel: scrolls += 1
-            case .leftMouseDragged, .rightMouseDragged, .otherMouseDragged: drags += 1
-            default: break
-            }
-        }
-        return (clicks, keys, scrolls, drags)
-    }
-
     private var durationLabel: String {
         String(format: "%.1fs", recorder.liveDuration)
     }
 
     var body: some View {
-        let s = stats
+        let s = recorder.liveStats
         ZStack {
             // Inky translucent layer over the host glass: guarantees legible white
             // content over any desktop, while the NSGlassEffectView behind still
@@ -197,7 +182,7 @@ struct RecordingHUDView: View {
                         Spacer()
                         Text(durationLabel).foregroundStyle(Color.white.opacity(0.55))
                         Spacer()
-                        Text("30s")
+                        Text("LIVE")
                     }
                     .font(.system(size: 9.5, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color.white.opacity(0.35))
@@ -351,7 +336,8 @@ private struct HUDButton: View {
                     )
             )
         }
-        .buttonStyle(HoverPressButtonStyle(hoverScale: 1.03))
+        .buttonStyle(HoverPressButtonStyle())
         .onHover { hovered = $0 }
+        .interactiveLift3D(intensity: 0.82, cornerRadius: 12)
     }
 }

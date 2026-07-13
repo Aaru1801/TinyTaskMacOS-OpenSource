@@ -4,9 +4,29 @@ import Combine
 
 /// Captures live mouse + keyboard events into an in-memory macro using a CGEventTap.
 final class Recorder: ObservableObject {
+    struct CaptureStats {
+        var clicks = 0
+        var keys = 0
+        var scrolls = 0
+        var drags = 0
+
+        mutating func include(_ kind: RecordedEvent.Kind) {
+            switch kind {
+            case .leftMouseDown, .rightMouseDown, .otherMouseDown: clicks += 1
+            case .keyDown: keys += 1
+            case .scrollWheel: scrolls += 1
+            case .leftMouseDragged, .rightMouseDragged, .otherMouseDragged: drags += 1
+            default: break
+            }
+        }
+    }
+
     @Published private(set) var isRecording = false
     @Published private(set) var events: [RecordedEvent] = []
     @Published private(set) var liveDuration: TimeInterval = 0
+    /// Maintained incrementally as pending events flush. The HUD redraws at 10 Hz,
+    /// so rescanning an hours-long recording on every frame quickly became O(n²).
+    private(set) var liveStats = CaptureStats()
 
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
@@ -33,8 +53,9 @@ final class Recorder: ObservableObject {
 
     /// Replace the in-memory event list (used when opening a saved macro).
     func loadEvents(_ new: [RecordedEvent]) {
-        events = new
-        liveDuration = new.last?.time ?? 0
+        events = RecordedEvent.normalized(new)
+        liveStats = Self.stats(for: events)
+        liveDuration = events.last?.time ?? 0
     }
 
     // MARK: - Editing
@@ -96,6 +117,8 @@ final class Recorder: ObservableObject {
 
     func clearAll() {
         events.removeAll()
+        pending.removeAll()
+        liveStats = CaptureStats()
         liveDuration = 0
     }
 
@@ -114,10 +137,6 @@ final class Recorder: ObservableObject {
     @discardableResult
     func startRecording() -> Bool {
         guard !isRecording else { return true }
-        events.removeAll()
-        pending.removeAll()
-        liveDuration = 0
-        startTime = CFAbsoluteTimeGetCurrent()
 
         let mask: CGEventMask =
             (1 << CGEventType.leftMouseDown.rawValue)     |
@@ -156,6 +175,14 @@ final class Recorder: ObservableObject {
             return false
         }
 
+        // Do not discard the active macro until the system has actually given us
+        // a usable tap. Otherwise a denied permission can leave an empty buffer
+        // that a later save would write over the user's macro.
+        events.removeAll()
+        pending.removeAll()
+        liveStats = CaptureStats()
+        liveDuration = 0
+        startTime = CFAbsoluteTimeGetCurrent()
         tap = newTap
         let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, newTap, 0)
         source = runLoopSource
@@ -185,8 +212,15 @@ final class Recorder: ObservableObject {
 
     private func flushPending() {
         guard !pending.isEmpty else { return }
+        for event in pending { liveStats.include(event.kind) }
         events.append(contentsOf: pending)
-        pending.removeAll()
+        pending.removeAll(keepingCapacity: true)
+    }
+
+    private static func stats(for events: [RecordedEvent]) -> CaptureStats {
+        var stats = CaptureStats()
+        for event in events { stats.include(event.kind) }
+        return stats
     }
 
     private func startDisplayTimer() {

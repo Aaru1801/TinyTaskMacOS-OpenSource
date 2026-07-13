@@ -17,10 +17,9 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         win.titleVisibility = .visible
         win.isMovableByWindowBackground = false
         win.backgroundColor = .clear
-        win.setFrameAutosaveName("TinyRecorder.MacroEditor")
+        restoreFrameOrCenter(win, name: "TinyRecorder.MacroEditor")
         super.init(window: win)
         win.delegate = self
-        if win.frameAutosaveName.isEmpty { win.center() }
     }
     required init?(coder: NSCoder) { fatalError() }
 }
@@ -195,6 +194,7 @@ private struct EditorToolbar: View {
                 .controlSize(.regular)
                 .buttonStyle(.bordered)
                 .help("Exports a double-clickable .command script")
+                .interactiveLift3D(intensity: 0.62, cornerRadius: 8)
 
                 // Play / Stop
                 Button {
@@ -208,6 +208,7 @@ private struct EditorToolbar: View {
                 .controlSize(.regular)
                 .tint(playing ? .red : .green)
                 .buttonStyle(.borderedProminent)
+                .interactiveLift3D(intensity: 0.76, cornerRadius: 8)
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
@@ -231,6 +232,15 @@ private struct EditorTimeline: View {
     @GestureState private var isDragging = false
 
     private var totalDuration: TimeInterval { events.last?.time ?? 0 }
+    private var sampledEventIndices: [Int] {
+        let count = events.count
+        guard count > 0 else { return [] }
+        let sampleCount = min(count, 800)
+        guard sampleCount > 1 else { return [0] }
+        return (0..<sampleCount).map { sample in
+            Int((Double(sample) * Double(count - 1) / Double(sampleCount - 1)).rounded())
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -259,21 +269,17 @@ private struct EditorTimeline: View {
                         )
 
                     // Event bars
-                    ForEach(0..<min(events.count, 800), id: \.self) { i in
-                        let stride = max(1, events.count / 800)
-                        let idx = i * stride
-                        if idx < events.count {
-                            let ev = events[idx]
-                            let x = totalDuration > 0
-                                ? CGFloat(ev.time / totalDuration) * w
-                                : 0
-                            let isImpact = ev.kind == .leftMouseDown || ev.kind == .rightMouseDown ||
-                                           ev.kind == .keyDown
-                            RoundedRectangle(cornerRadius: 1, style: .continuous)
-                                .fill(eventColor(for: ev.kind).opacity(isImpact ? 1.0 : 0.7))
-                                .frame(width: isImpact ? 2 : 1.2, height: isImpact ? h * 0.85 : h * 0.45)
-                                .position(x: x, y: h / 2)
-                        }
+                    ForEach(sampledEventIndices, id: \.self) { idx in
+                        let ev = events[idx]
+                        let x = totalDuration > 0
+                            ? CGFloat(ev.time / totalDuration) * w
+                            : 0
+                        let isImpact = ev.kind == .leftMouseDown || ev.kind == .rightMouseDown ||
+                                       ev.kind == .keyDown
+                        RoundedRectangle(cornerRadius: 1, style: .continuous)
+                            .fill(eventColor(for: ev.kind).opacity(isImpact ? 1.0 : 0.7))
+                            .frame(width: isImpact ? 2 : 1.2, height: isImpact ? h * 0.85 : h * 0.45)
+                            .position(x: x, y: h / 2)
                     }
 
                     // Selection range
@@ -317,6 +323,7 @@ private struct EditorTimeline: View {
                         }
                         .onEnded { _ in
                             if let dr = dragRange {
+                                let extendSelection = NSApp.currentEvent?.modifierFlags.contains(.option) == true
                                 let lo = min(dr.start, dr.end) * totalDuration
                                 let hi = max(dr.start, dr.end) * totalDuration
                                 let newSel = Set(events.enumerated()
@@ -326,10 +333,12 @@ private struct EditorTimeline: View {
                                     // Treat as click — select nearest event.
                                     let target = (dr.start + dr.end) / 2 * totalDuration
                                     if let idx = nearestEvent(to: target) {
-                                        selection = [idx]
+                                        if extendSelection { selection.insert(idx) }
+                                        else { selection = [idx] }
                                     }
                                 } else {
-                                    selection = newSel
+                                    if extendSelection { selection.formUnion(newSel) }
+                                    else { selection = newSel }
                                 }
                             }
                             dragRange = nil
@@ -447,6 +456,7 @@ private struct EditorSidebar: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .disabled(selection.isEmpty)
+                    .interactiveLift3D(intensity: 0.54, cornerRadius: 7)
 
                     HStack(spacing: 6) {
                         Button(action: trimBefore) {
@@ -454,12 +464,14 @@ private struct EditorSidebar: View {
                         }
                         .frame(maxWidth: .infinity)
                         .help("Delete every event before the selected one")
+                        .interactiveLift3D(intensity: 0.50, cornerRadius: 7)
 
                         Button(action: trimAfter) {
                             Label("Trim after", systemImage: "arrow.right.to.line")
                         }
                         .frame(maxWidth: .infinity)
                         .help("Delete every event after the selected one")
+                        .interactiveLift3D(intensity: 0.50, cornerRadius: 7)
                     }
                     .controlSize(.small)
                     .disabled(selection.count != 1)
@@ -473,6 +485,7 @@ private struct EditorSidebar: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .disabled(rows.isEmpty)
+                    .interactiveLift3D(intensity: 0.54, cornerRadius: 7)
                     .confirmationDialog(
                         "Remove all events from this macro?",
                         isPresented: $confirmClearAll,
@@ -503,6 +516,7 @@ private struct EditorSidebar: View {
                         Button("Reset") { stretchFactor = 1.0 }
                             .buttonStyle(.borderless)
                             .controlSize(.small)
+                            .interactiveLift3D(intensity: 0.44, cornerRadius: 6)
                     }
                     Text("> 1× slower · < 1× faster.")
                         .font(.system(size: 10))
@@ -514,6 +528,7 @@ private struct EditorSidebar: View {
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .disabled(rows.isEmpty || abs(stretchFactor - 1.0) < 0.001)
+                    .interactiveLift3D(intensity: 0.60, cornerRadius: 7)
                 }
 
                 section("Insert wait", icon: "hourglass") {
@@ -532,6 +547,7 @@ private struct EditorSidebar: View {
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .disabled(rows.isEmpty)
+                    .interactiveLift3D(intensity: 0.60, cornerRadius: 7)
                 }
 
                 section("Shift selected", icon: "arrow.left.and.right") {
@@ -546,11 +562,13 @@ private struct EditorSidebar: View {
                             Label("Earlier", systemImage: "minus")
                         }
                         .frame(maxWidth: .infinity)
+                        .interactiveLift3D(intensity: 0.50, cornerRadius: 7)
 
                         Button { shiftSelection(by:  shiftMs / 1000.0) } label: {
                             Label("Later", systemImage: "plus")
                         }
                         .frame(maxWidth: .infinity)
+                        .interactiveLift3D(intensity: 0.50, cornerRadius: 7)
                     }
                     .controlSize(.small)
                     .disabled(selection.isEmpty)
@@ -595,6 +613,7 @@ private struct EditorSidebar: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
+                        .interactiveLift3D(intensity: 0.60, cornerRadius: 7)
                     } else if selection.count > 1 {
                         emptyInspector(
                             icon: "square.stack",
@@ -919,6 +938,7 @@ private struct EventRowView: View {
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
         .onTapGesture { onTap(NSApp.currentEvent?.modifierFlags ?? []) }
+        .interactiveLift3D(intensity: 0.26, cornerRadius: 5)
     }
 }
 

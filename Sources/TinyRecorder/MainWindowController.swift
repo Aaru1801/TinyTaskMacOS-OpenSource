@@ -1,6 +1,15 @@
 import Cocoa
 import SwiftUI
 
+/// Restore an autosaved AppKit window frame, or center the window the first time
+/// it is shown. Checking `frameAutosaveName` after assigning it never detects a
+/// missing saved frame because the property is non-empty by construction.
+func restoreFrameOrCenter(_ window: NSWindow, name: NSWindow.FrameAutosaveName) {
+    let restored = window.setFrameUsingName(name)
+    window.setFrameAutosaveName(name)
+    if !restored { window.center() }
+}
+
 /// Hosts the library UI in a real, dockable window with proper macOS chrome.
 final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let controller: MenuBarController
@@ -18,19 +27,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
         let win = NSWindow(contentViewController: host)
         win.title = "TinyRecorder"
-        win.setContentSize(NSSize(width: 720, height: 600))
+        win.setContentSize(NSSize(width: 720, height: 460))
         win.styleMask = [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView]
-        win.minSize = NSSize(width: 400, height: 480)
+        win.minSize = NSSize(width: 620, height: 390)
         win.isReleasedWhenClosed = false
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
         win.toolbarStyle = .unified
         win.backgroundColor = .clear
         win.isMovableByWindowBackground = true
-        win.setFrameAutosaveName("TinyRecorder.MainWindow")
+        // New autosave key intentionally resets the former dashboard-sized frame
+        // to this compact utility footprint on first launch of the redesign.
+        restoreFrameOrCenter(win, name: "TinyRecorder.MainWindow.CompactV2")
         super.init(window: win)
         win.delegate = self
-        if win.frameAutosaveName.isEmpty { win.center() }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -55,9 +65,12 @@ final class SettingsWindowController: NSWindowController {
         win.title = "Settings"
         win.styleMask = [.titled, .closable]
         win.isReleasedWhenClosed = false
-        win.setFrameAutosaveName("TinyRecorder.Settings")
+        let settingsSize = NSSize(width: 580, height: 430)
+        win.setContentSize(settingsSize)
+        win.contentMinSize = settingsSize
+        win.contentMaxSize = settingsSize
+        restoreFrameOrCenter(win, name: "TinyRecorder.Settings")
         super.init(window: win)
-        if win.frameAutosaveName.isEmpty { win.center() }
     }
 
     required init?(coder: NSCoder) { fatalError() }

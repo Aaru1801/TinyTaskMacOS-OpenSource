@@ -38,6 +38,7 @@ struct PopoverContentView: View {
     @State private var newTagText: String = ""
     @State private var notesDraft: String = ""
     @State private var isDroppingFiles = false
+    @FocusState private var searchFocused: Bool
     /// Deterministic anchor for shift-click range selection.
     @State private var lastAnchorID: UUID?
 
@@ -55,16 +56,16 @@ struct PopoverContentView: View {
                     // Custom titlebar strip: wordmark centered, traffic lights
                     // live in the leading inset.
                     ZStack {
-                        Wordmark(size: 13)
+                        Wordmark(size: 12)
                     }
-                    .frame(height: 38)
+                    .frame(height: 32)
                     .frame(maxWidth: .infinity)
                     .background(VisualEffectBackground(material: .titlebar, blendingMode: .withinWindow))
                     .overlay(Divider().opacity(0.5), alignment: .bottom)
 
                     HStack(spacing: 0) {
-                        LibrarySidebar(filter: $filter)
-                            .frame(width: 200)
+                        LibrarySidebar(controller: controller, filter: $filter)
+                            .frame(width: 160)
                         Divider().opacity(0.5)
                         libraryColumn
                     }
@@ -103,18 +104,22 @@ struct PopoverContentView: View {
             }
         }
         .frame(
-            minWidth: isWindow ? 600 : 400,
-            idealWidth: isWindow ? 880 : 400,
+            minWidth: isWindow ? 620 : 400,
+            idealWidth: isWindow ? 720 : 400,
             maxWidth: isWindow ? .infinity : 400,
-            minHeight: isWindow ? 520 : 540,
-            idealHeight: isWindow ? 620 : 540,
-            maxHeight: isWindow ? .infinity : 540
+            minHeight: isWindow ? 390 : 500,
+            idealHeight: isWindow ? 460 : 500,
+            maxHeight: isWindow ? .infinity : 500
         )
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: state.accessibilityGranted)
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: state.inputMonitoringGranted)
+        .animation(Brand.spring, value: state.recordingCountdownActive)
         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: filteredMacros.count)
         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: filter)
         .onChange(of: filter) { selection.removeAll() }
+        .onReceive(NotificationCenter.default.publisher(for: MenuBarController.focusSearchNotification)) { _ in
+            searchFocused = true
+        }
         .sheet(item: $showAssignHotkey) { macro in
             HotkeyAssignmentSheet(
                 macro: macro,
@@ -192,12 +197,15 @@ struct PopoverContentView: View {
             LibraryHeader(
                 controller: controller,
                 search: $search,
+                searchFocused: $searchFocused,
                 isWindow: isWindow,
                 macroCount: library.macros.count
             )
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
+            .padding(.horizontal, isWindow ? 10 : 12)
+            .padding(.top, isWindow ? 9 : 10)
+            .padding(.bottom, isWindow ? 9 : 7)
+            .background(Color.primary.opacity(isWindow ? 0.018 : 0))
+            .overlay(Divider().opacity(isWindow ? 0.35 : 0), alignment: .bottom)
 
             #if !HIDE_PERMISSION_BANNER
             if !state.accessibilityGranted || !state.inputMonitoringGranted {
@@ -242,7 +250,20 @@ struct PopoverContentView: View {
             }
 
             if filteredMacros.isEmpty {
-                EmptyState(filter: filter, hasSearch: !search.isEmpty)
+                EmptyState(
+                    filter: filter,
+                    hasSearch: !search.isEmpty,
+                    countdownSeconds: state.countdownSeconds,
+                    onPrimaryAction: {
+                        if !search.isEmpty {
+                            search = ""
+                        } else if filter == .all {
+                            controller.toggleRecording()
+                        } else {
+                            filter = .all
+                        }
+                    }
+                )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 // Computed once for the whole grid, not per card.
@@ -266,9 +287,9 @@ struct PopoverContentView: View {
 
                     LazyVGrid(
                         columns: isWindow
-                            ? [GridItem(.adaptive(minimum: 200, maximum: 260), spacing: 10)]
+                            ? [GridItem(.adaptive(minimum: 225, maximum: 310), spacing: 8)]
                             : [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)],
-                        spacing: isWindow ? 10 : 8
+                        spacing: 8
                     ) {
                         ForEach(filteredMacros) { macro in
                             MacroCard(
@@ -339,8 +360,8 @@ struct PopoverContentView: View {
                             )
                         }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 6)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 5)
                 }
             }
 
@@ -364,18 +385,20 @@ struct PopoverContentView: View {
                 .onChange(of: state.statusMessage) { scheduleStatusClear() }
             }
 
-            Divider().opacity(0.5)
+            if !isWindow {
+                Divider().opacity(0.5)
 
-            LibraryFooter(controller: controller, state: state)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
+                LibraryFooter(controller: controller, state: state)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+            }
         }
     }
 
     /// Clears the status line a few seconds after the latest message.
     private func scheduleStatusClear() {
         let snapshot = state.statusMessage
-        guard !snapshot.isEmpty else { return }
+        guard !snapshot.isEmpty, !recorder.isRecording, !player.isPlaying else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
             if state.statusMessage == snapshot {
                 withAnimation(.easeOut(duration: 0.25)) { state.statusMessage = "" }
@@ -465,7 +488,8 @@ private struct FilterChipRow: View {
                     )
             )
         }
-        .buttonStyle(HoverPressButtonStyle(hoverScale: 1.05))
+        .buttonStyle(HoverPressButtonStyle())
+        .interactiveLift3D(intensity: 0.72, cornerRadius: 999)
         .accessibilityLabel("Filter: \(item.label)")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
@@ -474,8 +498,10 @@ private struct FilterChipRow: View {
 // MARK: - Sidebar (window mode)
 
 private struct LibrarySidebar: View {
+    let controller: MenuBarController
     @Binding var filter: LibraryFilter
     @EnvironmentObject var library: MacroLibrary
+    @EnvironmentObject var state: AppState
 
     private let filterItems: [LibraryFilter] = [.all, .favorites, .recent, .mostPlayed, .withHotkey]
 
@@ -483,27 +509,28 @@ private struct LibrarySidebar: View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
-                    sectionHeader("LIBRARY")
+                    sectionHeader("MACROS")
                     ForEach(filterItems, id: \.self) { item in
                         sidebarRow(item)
                     }
 
                     if !library.allTags.isEmpty {
                         sectionHeader("TAGS")
-                            .padding(.top, 14)
+                            .padding(.top, 10)
                         ForEach(library.allTags, id: \.self) { t in
                             sidebarRow(.tag(t))
                         }
                     }
-
-                    sectionHeader("STATS")
-                        .padding(.top, 14)
-                    StatsSummary()
                 }
-                .padding(.horizontal, 12)
-                .padding(.top, 16)
-                .padding(.bottom, 12)
+                .padding(.horizontal, 10)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
             }
+
+            Divider().opacity(0.45)
+            LibraryFooter(controller: controller, state: state)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 5)
         }
         .background(VisualEffectBackground(material: .sidebar, blendingMode: .behindWindow))
     }
@@ -513,8 +540,8 @@ private struct LibrarySidebar: View {
             .font(.system(size: 10, weight: .semibold))
             .tracking(0.6)
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 4)
-            .padding(.bottom, 4)
+            .padding(.horizontal, 5)
+            .padding(.bottom, 3)
     }
 
     @ViewBuilder
@@ -526,11 +553,11 @@ private struct LibrarySidebar: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: item.systemImage)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
                     .frame(width: 16)
                 Text(item.label)
-                    .font(.system(size: 12, weight: selected ? .semibold : .medium))
+                    .font(.system(size: 11.5, weight: selected ? .semibold : .medium))
                     .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
                 Spacer()
                 Text("\(count)")
@@ -538,59 +565,14 @@ private struct LibrarySidebar: View {
                     .foregroundStyle(selected ? AnyShapeStyle(.white.opacity(0.85)) : AnyShapeStyle(.secondary))
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+            .padding(.vertical, 4)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(selected ? Color.accentColor : Color.clear)
             )
         }
         .buttonStyle(.plain)
-    }
-}
-
-private struct StatsSummary: View {
-    @EnvironmentObject var library: MacroLibrary
-
-    private var totalMacros: Int { library.macros.count }
-    private var totalPlays: Int { library.macros.reduce(0) { $0 + $1.playCount } }
-    private var totalSaved: TimeInterval { library.macros.reduce(0) { $0 + $1.totalRunTime } }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            statRow("Macros", "\(totalMacros)", icon: "tray.full")
-            statRow("Total plays", "\(totalPlays)", icon: "play.circle")
-            statRow("Time replayed", formatDuration(totalSaved), icon: "clock")
-        }
-        .padding(8)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.primary.opacity(0.04))
-        )
-    }
-
-    @ViewBuilder
-    private func statRow(_ label: String, _ value: String, icon: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 12)
-            Text(label)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.secondary)
-            Spacer()
-            Text(value)
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.primary)
-                .contentTransition(.numericText())
-                .animation(.spring(response: 0.4), value: value)
-        }
-    }
-
-    private func formatDuration(_ d: TimeInterval) -> String {
-        if d < 60 { return String(format: "%ds", Int(d)) }
-        if d < 3600 { return String(format: "%dm", Int(d / 60)) }
-        return String(format: "%.1fh", d / 3600)
+        .interactiveLift3D(intensity: 0.62, cornerRadius: 6)
     }
 }
 
@@ -599,6 +581,7 @@ private struct StatsSummary: View {
 private struct LibraryHeader: View {
     let controller: MenuBarController
     @Binding var search: String
+    var searchFocused: FocusState<Bool>.Binding
     let isWindow: Bool
     let macroCount: Int
     @EnvironmentObject var recorder: Recorder
@@ -606,13 +589,14 @@ private struct LibraryHeader: View {
     @EnvironmentObject var state: AppState
 
     private var statusText: String {
+        if state.recordingCountdownActive { return "Preparing to record…" }
         if recorder.isRecording { return "Recording…" }
         if player.isPlaying     { return "Playing…" }
         return "Idle · \(macroCount) macro\(macroCount == 1 ? "" : "s")"
     }
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             // Brand row (popover only — the window shows the wordmark in its titlebar)
             if !isWindow {
                 HStack(spacing: 10) {
@@ -638,74 +622,158 @@ private struct LibraryHeader: View {
                                     .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
                                         .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5)))
                     }
-                    .buttonStyle(HoverPressButtonStyle(hoverScale: 1.06))
+                    .buttonStyle(HoverPressButtonStyle())
+                    .interactiveLift3D(intensity: 0.72, cornerRadius: 8)
                     .accessibilityLabel("Settings")
                 }
             }
 
-            // Big record button
-            Button {
-                controller.toggleRecording()
-            } label: {
-                HStack(spacing: 10) {
-                    if recorder.isRecording {
-                        Image(systemName: "stop.fill").font(.system(size: 11, weight: .black))
-                    } else {
-                        RecDot(size: 8, glassWhite: true)
+            if isWindow {
+                HStack(alignment: .center, spacing: 7) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Macros")
+                            .font(.system(size: 15, weight: .bold))
+                        HStack(spacing: 5) {
+                            if recorder.isRecording { RecDot(size: 6) }
+                            Text(statusText)
+                                .font(.system(size: 9.5, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                     }
-                    Text(recorder.isRecording ? "Stop recording" : "Start recording")
-                        .font(.system(size: 13, weight: .semibold))
-                        .tracking(-0.1)
-                    Spacer(minLength: 0)
-                    HStack(spacing: 3) {
-                        KeyCapView(text: state.recordHotkey.name, size: .sm, variant: .glass)
-                    }
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-                .frame(maxWidth: .infinity)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Brand.redGradient)
-                        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(.white.opacity(0.20), lineWidth: 0.5))
-                        .shadow(color: Brand.red500.opacity(0.36), radius: 10, x: 0, y: 5)
-                )
-            }
-            .buttonStyle(HoverPressButtonStyle(hoverScale: 1.012))
-            .accessibilityLabel(recorder.isRecording ? "Stop recording" : "Start recording")
+                    .fixedSize()
 
-            // Search
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-                TextField("Search macros", text: $search)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                if search.isEmpty {
-                    KeyCapView(text: "⌘", size: .sm)
-                    KeyCapView(text: "K", size: .sm)
-                } else {
-                    Button { search = "" } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Clear search")
+                    Spacer(minLength: 4)
+                    searchField
+                        .frame(minWidth: 110, idealWidth: 190, maxWidth: 240)
+                        .layoutPriority(1)
+                    importButton
+                    playbackButton
+                    compactRecordButton
+                }
+            } else {
+                HStack(spacing: 7) {
+                    compactRecordButton
+                        .frame(maxWidth: .infinity)
+                    playbackButton
+                    importButton
+                }
+                HStack(spacing: 8) {
+                    searchField
                 }
             }
-            .padding(.horizontal, 10)
-            .frame(height: 32)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.primary.opacity(0.06))
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5))
-            )
         }
+    }
+
+    private var compactRecordButton: some View {
+        Button { controller.toggleRecording() } label: {
+            Label(
+                state.recordingCountdownActive ? "Cancel" : (recorder.isRecording ? "Stop" : "Record"),
+                systemImage: state.recordingCountdownActive
+                    ? "xmark"
+                    : (recorder.isRecording ? "stop.fill" : "record.circle")
+            )
+            .font(.system(size: 11.5, weight: .semibold))
+            .frame(minWidth: isWindow ? 70 : 100, maxWidth: isWindow ? 84 : .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.regular)
+        .tint(Brand.red500)
+        .help(recordControlHelp)
+        .accessibilityLabel(recordControlLabel)
+        .interactiveLift3D(intensity: 0.86, cornerRadius: 8)
+    }
+
+    private var playbackButton: some View {
+        headerIconButton(
+            systemImage: player.isPlaying ? "stop.fill" : "play.fill",
+            tint: player.isPlaying ? Brand.red500 : Brand.sigGreen,
+            help: player.isPlaying ? "Stop playback (\(state.stopHotkey.name))" : "Play current macro (\(state.playHotkey.name))",
+            disabled: !player.isPlaying && (recorder.events.isEmpty || recorder.isRecording || state.recordingCountdownActive)
+        ) {
+            if player.isPlaying { controller.stopAll() }
+            else { controller.play() }
+        }
+    }
+
+    private var importButton: some View {
+        headerIconButton(
+            systemImage: "square.and.arrow.down",
+            tint: Brand.sigBlue,
+            help: "Import macro (⌘O)"
+        ) {
+            controller.open()
+        }
+    }
+
+    private func headerIconButton(
+        systemImage: String,
+        tint: Color,
+        help: String,
+        disabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 28, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(tint.opacity(0.11))
+                        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(tint.opacity(0.22), lineWidth: 0.5))
+                )
+        }
+        .buttonStyle(HoverPressButtonStyle())
+        .interactiveLift3D(intensity: 0.86, cornerRadius: 7)
+        .disabled(disabled)
+        .help(help)
+        .accessibilityLabel(help)
+    }
+
+    private var recordControlLabel: String {
+        if state.recordingCountdownActive { return "Cancel recording countdown" }
+        return recorder.isRecording ? "Stop recording" : "Start recording"
+    }
+
+    private var recordControlHelp: String {
+        let action = state.recordingCountdownActive
+            ? "Cancel countdown"
+            : (recorder.isRecording ? "Stop recording" : "Start recording")
+        return "\(action) (\(state.recordHotkey.name))"
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+            TextField("Search macros", text: $search)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .focused(searchFocused)
+            if search.isEmpty {
+                KeyCapView(text: "⌘K", size: .sm)
+            } else {
+                Button { search = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 28)
+        .background(
+            RoundedRectangle(cornerRadius: isWindow ? 8 : 12, style: .continuous)
+                .fill(Color.primary.opacity(0.06))
+                .overlay(RoundedRectangle(cornerRadius: isWindow ? 8 : 12, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5))
+        )
+        .interactiveLift3D(intensity: 0.34, cornerRadius: isWindow ? 8 : 12)
     }
 }
 
@@ -728,6 +796,7 @@ private struct SelectionToolbar: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Clear selection")
+            .interactiveLift3D(intensity: 0.46, cornerRadius: 6)
             Text("\(selectionCount) selected")
                 .font(.system(size: 11.5, weight: .semibold))
                 .foregroundStyle(.primary)
@@ -738,10 +807,12 @@ private struct SelectionToolbar: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(selectionCount != 1)
+                .interactiveLift3D(intensity: 0.54, cornerRadius: 7)
 
             Button("Export", systemImage: "square.and.arrow.up", action: onExport)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .interactiveLift3D(intensity: 0.54, cornerRadius: 7)
 
             Button("Delete", systemImage: "trash", role: .destructive) {
                 confirmDelete = true
@@ -749,6 +820,7 @@ private struct SelectionToolbar: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .tint(.red)
+            .interactiveLift3D(intensity: 0.54, cornerRadius: 7)
             .confirmationDialog(
                 "Delete \(selectionCount) macro\(selectionCount == 1 ? "" : "s")?",
                 isPresented: $confirmDelete,
@@ -809,6 +881,7 @@ private struct MacroCard: View {
     @State private var dragOver = false
     @State private var showCustomSpeed = false
     @State private var customSpeedText = ""
+    @State private var confirmDelete = false
     @FocusState private var cardFocused: Bool
     @FocusState private var renameFocused: Bool
 
@@ -822,6 +895,7 @@ private struct MacroCard: View {
 
     private var strokeColor: Color {
         if isCurrent { return cardAccentColor(for: macro.accent).opacity(0.55) }
+        if isSelected { return Brand.sigBlue.opacity(0.85) }
         if dragOver { return Color.accentColor.opacity(0.6) }
         return Color.primary.opacity(0.10)
     }
@@ -829,6 +903,7 @@ private struct MacroCard: View {
     var body: some View {
         styledCard
             .onHover { hovered = $0 }
+            .interactiveLift3D(intensity: 0.72, cornerRadius: 12)
             .onTapGesture {
                 let mods = NSApp.currentEvent?.modifierFlags ?? []
                 onSelect(mods)
@@ -838,7 +913,7 @@ private struct MacroCard: View {
             .focusable()
             .focused($cardFocused)
             .focusEffectDisabled()
-            .onDeleteCommand { onDelete() }
+            .onDeleteCommand { confirmDelete = true }
             .onExitCommand {
                 if isRenaming { onCommitRename() }
             }
@@ -850,7 +925,7 @@ private struct MacroCard: View {
             .accessibilityAction(named: "Edit") { onEdit() }
             .accessibilityAction(named: macro.favorite ? "Remove favorite" : "Add favorite") { onToggleFavorite() }
             .accessibilityAction(named: "Rename") { onStartRename() }
-            .accessibilityAction(named: "Delete") { onDelete() }
+            .accessibilityAction(named: "Delete") { confirmDelete = true }
             .contextMenu { cardMenuItems }
             .alert("Custom playback speed", isPresented: $showCustomSpeed) {
                 TextField("e.g. 1.75", text: $customSpeedText)
@@ -863,6 +938,16 @@ private struct MacroCard: View {
                 }
             } message: {
                 Text("Multiplier between 0.1× and 10×.")
+            }
+            .confirmationDialog(
+                "Delete \(macro.name)?",
+                isPresented: $confirmDelete,
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive, action: onDelete)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This macro will be permanently removed.")
             }
             .onDrag {
                 NSItemProvider(object: macro.id.uuidString as NSString)
@@ -879,23 +964,22 @@ private struct MacroCard: View {
 
     private var styledCard: some View {
         cardContent
-            .padding(11)
-            .frame(height: macro.tags.isEmpty ? 102 : 124)
+            .padding(10)
+            .frame(height: macro.tags.isEmpty ? 92 : 112)
             .background { cardBackground }
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(strokeColor, lineWidth: isCurrent ? 1.0 : 0.5)
+                    .strokeBorder(strokeColor, lineWidth: (isCurrent || isSelected) ? 1.2 : 0.5)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(Color.accentColor.opacity(cardFocused ? 0.9 : 0), lineWidth: 2.5)
             )
             .shadow(
-                color: .black.opacity(hovered ? 0.16 : 0.07),
-                radius: hovered ? 7 : 3,
-                y: hovered ? 3 : 1.5
+                color: .black.opacity(hovered ? 0.13 : 0.055),
+                radius: hovered ? 5 : 2,
+                y: hovered ? 2 : 1
             )
-            .scaleEffect(hovered ? 1.012 : 1.0)
             .animation(.spring(response: 0.25, dampingFraction: 0.85), value: hovered)
             .animation(Brand.spring, value: isCurrent)
             .animation(Brand.spring, value: isSelected)
@@ -914,7 +998,7 @@ private struct MacroCard: View {
         let tint = cardAccentColor(for: macro.accent)
         ZStack {
             shape.fill(Color(nsColor: .controlBackgroundColor))
-            shape.fill(tint.opacity(isCurrent ? 0.055 : 0))
+            shape.fill(tint.opacity(isCurrent ? 0.055 : (isSelected ? 0.10 : 0)))
         }
     }
 
@@ -943,11 +1027,11 @@ private struct MacroCard: View {
             Button("As Text…") { onExportText() }
         }
         Divider()
-        Button("Delete", role: .destructive) { onDelete() }
+        Button("Delete", role: .destructive) { confirmDelete = true }
     }
 
     private var cardContent: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 5) {
             // Title row
             HStack(spacing: 6) {
                 MacroIconView(macro: macro, onSetIcon: onSetIcon)
@@ -966,7 +1050,7 @@ private struct MacroCard: View {
                         .onAppear { renameFocused = true }
                 } else {
                     Text(macro.name)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -982,6 +1066,7 @@ private struct MacroCard: View {
                     }
                     .buttonStyle(.plain)
                     .help("Has notes — click to open")
+                    .interactiveLift3D(intensity: 0.38, cornerRadius: 5)
                 }
 
                 if let hk = macro.hotkey {
@@ -990,6 +1075,7 @@ private struct MacroCard: View {
                     }
                     .buttonStyle(.plain)
                     .help("Hotkey: \(hk.name) — click to change")
+                    .interactiveLift3D(intensity: 0.38, cornerRadius: 5)
                 }
 
                 Button(action: onToggleFavorite) {
@@ -1000,11 +1086,12 @@ private struct MacroCard: View {
                 .buttonStyle(.plain)
                 .help(macro.favorite ? "Unstar" : "Star")
                 .accessibilityLabel(macro.favorite ? "Remove favorite" : "Add favorite")
+                .interactiveLift3D(intensity: 0.38, cornerRadius: 5)
             }
 
             // Tiny waveform
             MiniWaveform(events: macro.events)
-                .frame(height: 18)
+                .frame(height: 16)
 
             // Tags row (if any)
             if !macro.tags.isEmpty {
@@ -1058,12 +1145,12 @@ private struct MacroCard: View {
                         Button("As Text…") { onExportText() }
                     }
                     Divider()
-                    Button("Delete", role: .destructive, action: onDelete)
+                    Button("Delete", role: .destructive) { confirmDelete = true }
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(.secondary)
-                        .frame(width: 22, height: 18)
+                        .frame(width: 20, height: 17)
                         .background(
                             RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .fill(Color.primary.opacity(0.05))
@@ -1071,8 +1158,9 @@ private struct MacroCard: View {
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
-                .frame(width: 22, height: 18)
+                .frame(width: 20, height: 17)
                 .accessibilityLabel("More actions")
+                .interactiveLift3D(intensity: 0.46, cornerRadius: 5)
             }
         }
     }
@@ -1229,26 +1317,27 @@ private struct MacroIconView: View {
             Button("Reset", role: .destructive) { onSetIcon(nil) }
         } label: {
             ZStack {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(LinearGradient(
                         colors: [tint.opacity(0.95), tint.opacity(0.65)],
                         startPoint: .topLeading, endPoint: .bottomTrailing
                     ))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
                             .strokeBorder(.white.opacity(0.18), lineWidth: 0.5)
                     )
                 Image(systemName: macro.icon ?? "wave.3.right")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(.white)
             }
-            .frame(width: 22, height: 22)
+            .frame(width: 20, height: 20)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .frame(width: 22, height: 22)
+        .frame(width: 20, height: 20)
         .help("Change icon")
         .accessibilityLabel("Change icon")
+        .interactiveLift3D(intensity: 0.45, cornerRadius: 5)
     }
 }
 
@@ -1264,7 +1353,7 @@ private struct CardActionButton: View {
             Image(systemName: systemImage)
                 .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(hovered ? AnyShapeStyle(tint) : AnyShapeStyle(Color.secondary))
-                .frame(width: 22, height: 18)
+                .frame(width: 20, height: 17)
                 .background(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .fill(Color.primary.opacity(hovered ? 0.10 : 0.05))
@@ -1273,6 +1362,7 @@ private struct CardActionButton: View {
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
         .accessibilityLabel(label.isEmpty ? systemImage : label)
+        .interactiveLift3D(intensity: 0.48, cornerRadius: 5)
     }
 }
 
@@ -1314,14 +1404,18 @@ struct MiniWaveform: View {
     private func sampleEvents(maxBars: Int, width: CGFloat, dur: TimeInterval) -> [Bar] {
         guard !events.isEmpty else { return [] }
         let n = min(events.count, maxBars)
-        let stride = max(1, events.count / n)
         var result: [Bar] = []
-        var i = 0
-        while i < events.count {
+        result.reserveCapacity(n)
+        for sample in 0..<n {
+            // Evenly sample the complete recording, including its final event.
+            // Integer division previously exceeded maxBars for many event counts
+            // and biased every waveform toward the beginning of the macro.
+            let i = n == 1
+                ? 0
+                : Int((Double(sample) * Double(events.count - 1) / Double(n - 1)).rounded())
             let ev = events[i]
             let x = CGFloat(ev.time / dur) * width
             result.append(Bar(x: x, kind: ev.kind, isImpact: Brand.isImpact(ev.kind)))
-            i += stride
         }
         return result
     }
@@ -1336,30 +1430,39 @@ struct MiniWaveform: View {
 private struct EmptyState: View {
     let filter: LibraryFilter
     let hasSearch: Bool
+    let countdownSeconds: Int
+    let onPrimaryAction: () -> Void
     @State private var bounce = false
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             ZStack {
                 Circle()
                     .fill(Color.primary.opacity(0.04))
-                    .frame(width: 88, height: 88)
+                    .frame(width: 64, height: 64)
                 Image(systemName: hasSearch ? "magnifyingglass" : (filter == .favorites ? "star" : "tray"))
-                    .font(.system(size: 34, weight: .light))
+                    .font(.system(size: 25, weight: .light))
                     .foregroundStyle(.tertiary)
                     .scaleEffect(bounce ? 1.0 : 0.8)
                     .animation(.spring(response: 0.6, dampingFraction: 0.55), value: bounce)
             }
             Text(title)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text(subtitle)
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 280)
+
+            Button(primaryActionTitle, action: onPrimaryAction)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .tint(filter == .all && !hasSearch ? Brand.red500 : Color.accentColor)
+                .padding(.top, 2)
+                .interactiveLift3D(intensity: 0.72, cornerRadius: 8)
         }
-        .padding(40)
+        .padding(24)
         .onAppear { bounce = true }
     }
 
@@ -1379,9 +1482,18 @@ private struct EmptyState: View {
         if hasSearch { return "Try a different search term." }
         switch filter {
         case .favorites: return "Tap the ★ on any card to favorite it."
-        case .all:       return "Press Record to capture your first macro. TinyRecorder will count down 3 seconds before it begins."
+        case .all:
+            if countdownSeconds > 0 {
+                return "Capture your first macro. Recording begins after a \(countdownSeconds)-second countdown."
+            }
+            return "Capture your first macro. Recording starts immediately."
         default:         return "Try the All filter."
         }
+    }
+
+    private var primaryActionTitle: String {
+        if hasSearch { return "Clear Search" }
+        return filter == .all ? "Record First Macro" : "Show All Macros"
     }
 }
 
@@ -1396,7 +1508,7 @@ private struct LibraryFooter: View {
             FooterRow(
                 icon: "plus",
                 label: "New macro",
-                rightAccessory: AnyView(KeyCapView(text: "⌘R")),
+                rightAccessory: AnyView(KeyCapView(text: "⌘R", size: .sm)),
                 action: { controller.toggleRecording() }
             )
             FooterRow(
@@ -1408,7 +1520,7 @@ private struct LibraryFooter: View {
             FooterRow(
                 icon: "gearshape",
                 label: "Settings",
-                rightAccessory: AnyView(KeyCapView(text: "⌘,")),
+                rightAccessory: AnyView(KeyCapView(text: "⌘,", size: .sm)),
                 action: { controller.showSettingsWindow() }
             )
         }
@@ -1426,17 +1538,18 @@ private struct FooterRow: View {
         Button(action: action) {
             HStack(spacing: 9) {
                 Image(systemName: icon)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(width: 14)
                 Text(label)
-                    .font(.system(size: 12))
+                    .font(.system(size: 11.5))
                     .foregroundStyle(.primary)
+                    .lineLimit(1)
                 Spacer()
                 if let r = rightAccessory { r }
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.vertical, 4.5)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.primary.opacity(hovered ? 0.06 : 0))
@@ -1444,6 +1557,7 @@ private struct FooterRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
+        .interactiveLift3D(intensity: 0.58, cornerRadius: 6)
     }
 }
 
@@ -1458,17 +1572,17 @@ private struct PermissionBanner: View {
     let inputMonitoringGranted: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Image(systemName: "exclamationmark.shield.fill")
                 .foregroundStyle(.orange)
-                .font(.system(size: 16))
+                .font(.system(size: 14))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Permissions required")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(.primary)
                 Text("Grant Accessibility & Input Monitoring to record and replay.")
-                    .font(.system(size: 10.5))
+                    .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1484,13 +1598,13 @@ private struct PermissionBanner: View {
             }
             .buttonStyle(PillButtonStyle(tint: .orange))
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(Color.orange.opacity(0.10))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
                         .strokeBorder(Color.orange.opacity(0.45), lineWidth: 0.8)
                 )
         )
@@ -1546,6 +1660,7 @@ struct LoopChip: View {
         .help(loops <= 0 ? "Repeats continuously" : (loops == 1 ? "Plays once" : "Repeats \(loops) times"))
         .accessibilityLabel(loops <= 0 ? "Repeat: continuous" : "Repeat: \(loops) times")
         .onHover { hovered = $0 }
+        .interactiveLift3D(intensity: 0.45, cornerRadius: 5)
         .alert("Custom repeat count", isPresented: $showCustom) {
             TextField("e.g. 42", text: $customText)
             Button("Cancel", role: .cancel) {}
@@ -1610,17 +1725,20 @@ private struct HotkeyAssignmentSheet: View {
                     .buttonStyle(.plain)
                     .disabled(inUse)
                     .help(inUse ? "Already in use" : "")
+                    .interactiveLift3D(intensity: 0.56, cornerRadius: 7)
                 }
             }
 
             HStack {
                 if currentHotkey != nil {
-                    Button("Clear") { onSave(nil) }
-                        .controlSize(.regular)
+                Button("Clear") { onSave(nil) }
+                    .controlSize(.regular)
+                    .interactiveLift3D(intensity: 0.50, cornerRadius: 7)
                 }
                 Spacer()
                 Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
+                    .interactiveLift3D(intensity: 0.50, cornerRadius: 7)
                 Button("Assign") {
                     if let s = selected, let pair = fkeys.first(where: { $0.0 == s }) {
                         onSave(HotkeyBinding(keyCode: pair.0, name: pair.1))
@@ -1629,6 +1747,7 @@ private struct HotkeyAssignmentSheet: View {
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .disabled(selected == nil)
+                .interactiveLift3D(intensity: 0.68, cornerRadius: 8)
             }
         }
         .padding(20)
@@ -1677,9 +1796,11 @@ private struct NotesSheet: View {
                 Spacer()
                 Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
+                    .interactiveLift3D(intensity: 0.50, cornerRadius: 7)
                 Button("Save", action: onSave)
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
+                    .interactiveLift3D(intensity: 0.68, cornerRadius: 8)
             }
         }
         .padding(20)
@@ -1714,6 +1835,7 @@ private struct TagAssignmentSheet: View {
                 Button("Add") { onAdd(tagText) }
                     .keyboardShortcut(.defaultAction)
                     .disabled(tagText.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .interactiveLift3D(intensity: 0.56, cornerRadius: 7)
             }
 
             if !macro.tags.isEmpty {
@@ -1731,6 +1853,7 @@ private struct TagAssignmentSheet: View {
                 Button("Done", action: onDone)
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
+                    .interactiveLift3D(intensity: 0.68, cornerRadius: 8)
             }
         }
         .padding(20)
@@ -1745,7 +1868,7 @@ private struct FlowChips: View {
 
     var body: some View {
         VStack(alignment: .leading) {
-            HStack(spacing: 4) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 6)], alignment: .leading, spacing: 6) {
                 ForEach(items, id: \.self) { t in
                     HStack(spacing: 4) {
                         Text(t).font(.system(size: 10, weight: .semibold))
@@ -1760,6 +1883,7 @@ private struct FlowChips: View {
                     .padding(.vertical, 3)
                     .background(Capsule().fill(Color.accentColor.opacity(0.18)))
                     .onTapGesture { onAdd?(t) }
+                    .interactiveLift3D(intensity: 0.38, cornerRadius: 999)
                 }
             }
         }
@@ -1773,6 +1897,7 @@ struct SettingsPanel: View {
     /// True when hosted in the dedicated Settings window.
     var inWindow: Bool = false
     @EnvironmentObject var state: AppState
+    @EnvironmentObject var library: MacroLibrary
 
     @State private var showCustomLoop = false
     @State private var customLoopText = ""
@@ -1795,7 +1920,7 @@ struct SettingsPanel: View {
             state.stopHotkey.keyCode,
             state.playHotkey.keyCode,
         ]
-        for m in controller.library.macros {
+        for m in library.macros {
             if let hk = m.hotkey { taken.insert(hk.keyCode) }
         }
         taken.remove(current)
@@ -1805,138 +1930,37 @@ struct SettingsPanel: View {
     var body: some View {
         ZStack {
             VisualEffectBackground(material: inWindow ? .windowBackground : .popover)
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Image(systemName: "gearshape.fill")
-                        .foregroundStyle(.secondary)
-                    Text("Settings")
-                        .font(.system(size: 13, weight: .semibold))
-                }
+            VStack(alignment: .leading, spacing: 14) {
+                settingsHeader
 
-                settingsGroup("Hotkeys", systemImage: "keyboard") {
-                    hotkeyRow(title: "Record / Stop recording", binding: Binding(
-                        get: { state.recordHotkey },
-                        set: { state.recordHotkey = $0; controller.reapplyHotkeys() }
-                    ))
-                    hotkeyRow(title: "Stop everything", binding: Binding(
-                        get: { state.stopHotkey },
-                        set: { state.stopHotkey = $0; controller.reapplyHotkeys() }
-                    ))
-                    hotkeyRow(title: "Play", binding: Binding(
-                        get: { state.playHotkey },
-                        set: { state.playHotkey = $0; controller.reapplyHotkeys() }
-                    ))
-                }
-
-                settingsGroup("General", systemImage: "macwindow") {
-                    HStack {
-                        Text("Show as").font(.system(size: 11.5))
-                        Spacer()
-                        Picker("", selection: Binding(
-                            get: { state.menuBarOnly },
-                            set: { controller.setMenuBarOnly($0) }
-                        )) {
-                            Text("Dock app").tag(false)
-                            Text("Menu bar only").tag(true)
+                if inWindow {
+                    HStack(alignment: .top, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            generalGroup
+                            recordingGroup
+                            permissionsGroup
                         }
-                        .labelsHidden()
-                        .frame(width: 140)
-                    }
-                    Text("Menu bar only hides the Dock icon — open TinyRecorder from the menu-bar icon.")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
 
-                settingsGroup("Recording", systemImage: "record.circle") {
-                    HStack {
-                        Text("Countdown").font(.system(size: 11.5))
-                        Spacer()
-                        Picker("", selection: $state.countdownSeconds) {
-                            Text("Off").tag(0)
-                            Text("1s").tag(1)
-                            Text("3s").tag(3)
-                            Text("5s").tag(5)
+                        VStack(alignment: .leading, spacing: 14) {
+                            hotkeysGroup
+                            playbackGroup
                         }
-                        .labelsHidden()
-                        .frame(width: 110)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
                     }
-                    Toggle(isOn: $state.showRecordingHUD) {
-                        Text("Show floating HUD").font(.system(size: 11.5))
-                    }
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    Toggle(isOn: $state.soundEnabled) {
-                        Text("Sound effects").font(.system(size: 11.5))
-                    }
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
+                } else {
+                    hotkeysGroup
+                    generalGroup
+                    recordingGroup
+                    playbackGroup
+                    permissionsGroup
                 }
 
-                settingsGroup("Default playback", systemImage: "play.circle") {
-                    HStack {
-                        Text("Repeat").font(.system(size: 11.5))
-                        Spacer()
-                        Menu {
-                            Button("1× (no loop)") { state.loops = 1 }
-                            Button("2×") { state.loops = 2 }
-                            Button("5×") { state.loops = 5 }
-                            Button("10×") { state.loops = 10 }
-                            Button("25×") { state.loops = 25 }
-                            Button("100×") { state.loops = 100 }
-                            Divider()
-                            Button { state.loops = 0 } label: { Label("Continuous", systemImage: "infinity") }
-                            Divider()
-                            Button("Custom…") {
-                                customLoopText = state.loops > 0 ? "\(state.loops)" : ""
-                                showCustomLoop = true
-                            }
-                        } label: {
-                            Text(state.loops <= 0 ? "∞ Continuous" : "\(state.loops)×")
-                                .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                        }
-                        .menuStyle(.borderlessButton)
-                        .frame(width: 120)
-                    }
-                    HStack {
-                        Text("Speed").font(.system(size: 11.5))
-                        Spacer()
-                        Picker("", selection: $state.speed) {
-                            Text("0.5×").tag(0.5)
-                            Text("1×").tag(1.0)
-                            Text("2×").tag(2.0)
-                            Text("4×").tag(4.0)
-                        }
-                        .labelsHidden()
-                        .frame(width: 110)
-                    }
-                }
-
-                settingsGroup("Permissions", systemImage: "lock.shield") {
-                    permissionRow(title: "Accessibility",
-                                  granted: state.accessibilityGranted,
-                                  action: controller.openAccessibilityPrefs)
-                    permissionRow(title: "Input Monitoring",
-                                  granted: state.inputMonitoringGranted,
-                                  action: controller.openInputMonitoringPrefs)
-                }
-
-                HStack {
-                    Button("Replay welcome") { controller.showWelcome() }
-                        .buttonStyle(.borderless)
-                        .controlSize(.small)
-                    Spacer()
-                    Text(appVersion)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                    Button("Quit") { controller.quit() }
-                        .buttonStyle(.borderless)
-                        .controlSize(.small)
-                }
+                settingsFooter
             }
-            .padding(14)
+            .padding(inWindow ? 18 : 14)
         }
-        .frame(width: 340)
+        .frame(width: inWindow ? 580 : 340)
         .alert("Custom loop count", isPresented: $showCustomLoop) {
             TextField("e.g. 42", text: $customLoopText)
             Button("Cancel", role: .cancel) {}
@@ -1948,6 +1972,154 @@ struct SettingsPanel: View {
         } message: {
             Text("Enter a number, or 0 (or leave blank) for continuous.")
         }
+    }
+
+    private var settingsHeader: some View {
+        HStack(spacing: 10) {
+            BrandMark(size: inWindow ? 32 : 26)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("TinyRecorder")
+                    .font(.system(size: inWindow ? 16 : 13, weight: .semibold))
+                Text("Recording and playback preferences")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(appVersion)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private var hotkeysGroup: some View {
+        settingsGroup("Hotkeys", systemImage: "keyboard") {
+            hotkeyRow(title: "Record / Stop", binding: Binding(
+                get: { state.recordHotkey },
+                set: { state.recordHotkey = $0; controller.reapplyHotkeys() }
+            ))
+            hotkeyRow(title: "Stop everything", binding: Binding(
+                get: { state.stopHotkey },
+                set: { state.stopHotkey = $0; controller.reapplyHotkeys() }
+            ))
+            hotkeyRow(title: "Play", binding: Binding(
+                get: { state.playHotkey },
+                set: { state.playHotkey = $0; controller.reapplyHotkeys() }
+            ))
+        }
+    }
+
+    private var generalGroup: some View {
+        settingsGroup("General", systemImage: "macwindow") {
+            HStack {
+                Text("Show as").font(.system(size: 11.5))
+                Spacer()
+                Picker("", selection: Binding(
+                    get: { state.menuBarOnly },
+                    set: { controller.setMenuBarOnly($0) }
+                )) {
+                    Text("Dock app").tag(false)
+                    Text("Menu bar only").tag(true)
+                }
+                .labelsHidden()
+                .frame(width: 130)
+            }
+            Text("Menu bar only hides the Dock icon. Open TinyRecorder from its menu-bar icon.")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var recordingGroup: some View {
+        settingsGroup("Recording", systemImage: "record.circle") {
+            HStack {
+                Text("Countdown").font(.system(size: 11.5))
+                Spacer()
+                Picker("", selection: $state.countdownSeconds) {
+                    Text("Off").tag(0)
+                    Text("1s").tag(1)
+                    Text("3s").tag(3)
+                    Text("5s").tag(5)
+                }
+                .labelsHidden()
+                .frame(width: 100)
+            }
+            Toggle("Show floating HUD", isOn: $state.showRecordingHUD)
+                .font(.system(size: 11.5))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+            Toggle("Sound effects", isOn: $state.soundEnabled)
+                .font(.system(size: 11.5))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+        }
+    }
+
+    private var playbackGroup: some View {
+        settingsGroup("Default playback", systemImage: "play.circle") {
+            HStack {
+                Text("Repeat").font(.system(size: 11.5))
+                Spacer()
+                Menu {
+                    Button("1× (no loop)") { state.loops = 1 }
+                    Button("2×") { state.loops = 2 }
+                    Button("5×") { state.loops = 5 }
+                    Button("10×") { state.loops = 10 }
+                    Button("25×") { state.loops = 25 }
+                    Button("100×") { state.loops = 100 }
+                    Divider()
+                    Button { state.loops = 0 } label: { Label("Continuous", systemImage: "infinity") }
+                    Divider()
+                    Button("Custom…") {
+                        customLoopText = state.loops > 0 ? "\(state.loops)" : ""
+                        showCustomLoop = true
+                    }
+                } label: {
+                    Text(state.loops <= 0 ? "∞ Continuous" : "\(state.loops)×")
+                        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 115)
+            }
+            HStack {
+                Text("Speed").font(.system(size: 11.5))
+                Spacer()
+                Picker("", selection: $state.speed) {
+                    Text("0.5×").tag(0.5)
+                    Text("1×").tag(1.0)
+                    Text("2×").tag(2.0)
+                    Text("4×").tag(4.0)
+                }
+                .labelsHidden()
+                .frame(width: 100)
+            }
+        }
+    }
+
+    private var permissionsGroup: some View {
+        settingsGroup("Permissions", systemImage: "lock.shield") {
+            permissionRow(title: "Accessibility",
+                          granted: state.accessibilityGranted,
+                          action: controller.openAccessibilityPrefs)
+            permissionRow(title: "Input Monitoring",
+                          granted: state.inputMonitoringGranted,
+                          action: controller.openInputMonitoringPrefs)
+        }
+    }
+
+    private var settingsFooter: some View {
+        HStack {
+            Button("Replay Welcome") { controller.showWelcome() }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .interactiveLift3D(intensity: 0.44, cornerRadius: 6)
+            Spacer()
+            Button("Quit TinyRecorder") { controller.quit() }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .interactiveLift3D(intensity: 0.44, cornerRadius: 6)
+        }
+        .padding(.top, 2)
     }
 
     @ViewBuilder
@@ -2011,6 +2183,7 @@ struct SettingsPanel: View {
                 ForEach(fkeys, id: \.0) { pair in
                     Text(taken.contains(pair.0) ? "\(pair.1) (in use)" : pair.1)
                         .tag(pair.0)
+                        .disabled(taken.contains(pair.0))
                 }
             }
             .labelsHidden()
@@ -2023,7 +2196,6 @@ struct SettingsPanel: View {
 
 struct PillButtonStyle: ButtonStyle {
     var tint: Color = .blue
-    @State private var hovered = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -2032,9 +2204,10 @@ struct PillButtonStyle: ButtonStyle {
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
             .prominentGlassCapsule(tint: tint)
-            .scaleEffect(configuration.isPressed ? 0.97 : (hovered ? 1.04 : 1.0))
-            .animation(.spring(response: 0.28, dampingFraction: 0.7), value: hovered)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .offset(y: configuration.isPressed ? 1 : 0)
+            .brightness(configuration.isPressed ? -0.035 : 0)
             .animation(.spring(response: 0.16, dampingFraction: 0.6), value: configuration.isPressed)
-            .onHover { hovered = $0 }
+            .interactiveLift3D(intensity: 0.78, cornerRadius: 999)
     }
 }

@@ -103,6 +103,7 @@ private struct WelcomeView: View {
                         Button("Back") { withAnimation(.spring(response: 0.4)) { step = Step(rawValue: step.rawValue - 1) ?? .welcome } }
                             .buttonStyle(.bordered)
                             .controlSize(.large)
+                            .interactiveLift3D(intensity: 0.66, cornerRadius: 9)
                     }
                     Spacer()
                     if step == .ready {
@@ -115,6 +116,7 @@ private struct WelcomeView: View {
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
                         .tint(.red)
+                        .interactiveLift3D(intensity: 0.78, cornerRadius: 9)
                     } else {
                         // Never trap the user: permissions can be skipped and
                         // granted later from Settings.
@@ -124,6 +126,7 @@ private struct WelcomeView: View {
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.large)
+                            .interactiveLift3D(intensity: 0.66, cornerRadius: 9)
                         }
                         Button {
                             withAnimation(.spring(response: 0.4)) {
@@ -137,6 +140,7 @@ private struct WelcomeView: View {
                         .controlSize(.large)
                         .tint(.red)
                         .disabled(step == .permissions && !(accessibility && inputMonitoring))
+                        .interactiveLift3D(intensity: 0.78, cornerRadius: 9)
                     }
                 }
                 .padding(.horizontal, 24)
@@ -403,6 +407,7 @@ private struct PermissionCard: View {
             Button(granted ? "Granted" : "Open Settings", action: action)
                 .controlSize(.small)
                 .disabled(granted)
+                .interactiveLift3D(intensity: 0.58, cornerRadius: 7)
         }
         .padding(12)
         .background(

@@ -4,6 +4,7 @@ import Combine
 import UniformTypeIdentifiers
 
 final class MenuBarController: NSObject, NSPopoverDelegate {
+    static let focusSearchNotification = Notification.Name("TinyRecorder.focusSearch")
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
     private var globalClickMonitor: Any?
@@ -120,7 +121,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     // MARK: - Popover
 
     private func configurePopover() {
-        popover.contentSize = NSSize(width: 400, height: 540)
+        popover.contentSize = NSSize(width: 400, height: 500)
         popover.behavior = .transient
         popover.animates = true
         popover.delegate = self
@@ -211,18 +212,22 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // settings UI — no state-wide sink needed.
     }
 
-    /// If macOS Accessibility is revoked while a recording is live, the event tap
-    /// goes dead but our UI would keep "recording" forever. Stop cleanly, keep the
-    /// partial capture in the buffer (no silent auto-save), and tell the user.
+    /// If macOS revokes either input permission while a recording is live, the
+    /// event tap goes dead but our UI would keep "recording" forever. Stop
+    /// cleanly, keep the partial capture in the buffer, and tell the user.
     private func observeAccessibilityRevocation() {
-        state.$accessibilityGranted
-            .removeDuplicates()
+        Publishers.CombineLatest(state.$accessibilityGranted, state.$inputMonitoringGranted)
+            .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 }
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] granted in
-                guard let self, !granted, self.recorder.isRecording else { return }
+            .sink { [weak self] accessibilityGranted, inputMonitoringGranted in
+                guard let self,
+                      (!accessibilityGranted || !inputMonitoringGranted),
+                      self.recorder.isRecording else { return }
                 self.recorder.stopRecording()
                 self.hud?.hide()
-                self.state.statusMessage = "Recording stopped — Accessibility permission was revoked."
+                self.state.statusMessage = accessibilityGranted
+                    ? "Recording stopped — Input Monitoring permission was revoked."
+                    : "Recording stopped — Accessibility permission was revoked."
                 SoundController.shared.play(.error)
             }
             .store(in: &cancellables)
@@ -399,6 +404,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // A second press during the countdown means "never mind".
         if let countdown, countdown.isActive {
             countdown.cancel()
+            state.recordingCountdownActive = false
             state.statusMessage = "Recording cancelled."
             return
         }
@@ -425,41 +431,64 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     /// Wraps the actual recording start with an optional countdown.
     private func beginRecordingFlow() {
-        if player.isPlaying { player.stop() }
+        // Fail immediately instead of making the user sit through a countdown
+        // before discovering that macOS cannot start the capture.
+        guard state.inputMonitoringGranted else {
+            state.statusMessage = "Input Monitoring permission is required to record."
+            SoundController.shared.play(.error)
+            return
+        }
+        if player.isPlaying { stopPlayback() }
         persistCurrentMacroIfNeeded()
         if popover.isShown { popover.performClose(nil) }
 
         let secs = state.countdownSeconds
         if secs > 0 {
+            state.recordingCountdownActive = true
             countdown?.start(seconds: secs) { [weak self] in
+                self?.state.recordingCountdownActive = false
                 self?.actuallyStartRecording()
             }
         } else {
+            state.recordingCountdownActive = false
             actuallyStartRecording()
         }
     }
 
     private func actuallyStartRecording() {
+        state.recordingCountdownActive = false
+        guard state.inputMonitoringGranted else {
+            state.statusMessage = "Could not start recording. Grant Input Monitoring permission."
+            SoundController.shared.play(.error)
+            return
+        }
         let ok = recorder.startRecording()
         if ok {
             if state.showRecordingHUD { hud?.show() }
             state.statusMessage = "Recording…"
             SoundController.shared.play(.recordStart)
         } else {
-            state.statusMessage = "Could not start. Grant Accessibility permission."
+            state.statusMessage = "Could not start recording. Check Input Monitoring permission."
             SoundController.shared.play(.error)
         }
     }
 
     func stopAll() {
         countdown?.cancel()
+        state.recordingCountdownActive = false
         if recorder.isRecording {
             // F7 = "abort". Throw away the in-flight recording instead of saving.
             cancelRecording()
             return
         }
-        if player.isPlaying { player.stop() }
+        if player.isPlaying { stopPlayback() }
         state.statusMessage = "Stopped."
+    }
+
+    private func stopPlayback() {
+        player.stop()
+        playingMacroID = nil
+        chainVisited.removeAll()
     }
 
     func play() {
@@ -467,13 +496,21 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     private func play(isChained: Bool) {
+        guard state.accessibilityGranted else {
+            state.statusMessage = "Playback requires Accessibility permission."
+            SoundController.shared.play(.error)
+            return
+        }
         guard !recorder.events.isEmpty else {
             state.statusMessage = "Nothing to play. Record first."
             return
         }
         // A pending record countdown and playback can't coexist — the recorder
         // would capture our own synthetic events.
-        if let countdown, countdown.isActive { countdown.cancel() }
+        if let countdown, countdown.isActive {
+            countdown.cancel()
+            state.recordingCountdownActive = false
+        }
         if recorder.isRecording { toggleRecording() }
         if player.isPlaying { return }
         if !isChained { chainVisited.removeAll() }
@@ -529,7 +566,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     func playMacroByID(_ id: UUID) {
         guard let macro = library.macros.first(where: { $0.id == id }) else { return }
         if recorder.isRecording { toggleRecording() }
-        if player.isPlaying { player.stop() }
+        if player.isPlaying { stopPlayback() }
         persistCurrentMacroIfNeeded()
         chainVisited.removeAll()
         library.select(id: id)
@@ -546,6 +583,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// or native `.tinyrec`/`.json`. Dispatches on extension, falling back to a
     /// content sniff so a mislabeled file still has a chance.
     func importMacro(at url: URL) {
+        // Finder drops and file-open events may arrive while a recording is
+        // active. Save that capture before replacing the recorder buffer.
+        if recorder.isRecording { toggleRecording() }
         do {
             let data = try Data(contentsOf: url)
             let ext = url.pathExtension.lowercased()
@@ -788,7 +828,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 let enc = JSONEncoder()
                 enc.outputFormatting = [.prettyPrinted]
                 let data = try enc.encode(macro)
-                try data.write(to: url)
+                try data.write(to: url, options: .atomic)
                 self.restrictPermissions(url)
                 self.state.statusMessage = "Exported \(url.lastPathComponent)."
             } catch {
@@ -884,6 +924,11 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             }, onClose: { [weak self] in
                 self?.state.onboardingComplete = true
                 self?.welcomeWC = nil
+                if self?.state.menuBarOnly == true {
+                    self?.showPopoverProgrammatically()
+                } else {
+                    self?.showMainWindow()
+                }
             })
         }
         welcomeWC?.show()
@@ -905,6 +950,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// a live recording is stopped and saved, pending editor edits persist.
     func prepareForTermination() {
         countdown?.cancel()
+        state.recordingCountdownActive = false
         if player.isPlaying { player.stop() }
         if recorder.isRecording {
             recorder.stopRecording()

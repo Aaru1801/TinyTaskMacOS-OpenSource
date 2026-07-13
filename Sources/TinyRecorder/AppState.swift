@@ -28,6 +28,9 @@ final class AppState: ObservableObject {
         didSet { persist(playHotkey, key: "hk_play") }
     }
     @Published var statusMessage: String = ""
+    /// Ephemeral UI state for the pre-record overlay. Kept here so every active
+    /// surface can label the record toggle accurately while the countdown runs.
+    @Published var recordingCountdownActive: Bool = false
     @Published var accessibilityGranted: Bool = AXIsProcessTrusted()
     /// Input Monitoring is a separate TCC permission from Accessibility; both are
     /// required to record. Polled live alongside Accessibility so the UI reflects

@@ -77,18 +77,19 @@ if args.count >= 4, args[1] == "--convert" {
             }
         }
 
+        let normalizedEvents = RecordedEvent.normalized(result.events)
         let outExt = outURL.pathExtension.lowercased()
         let name = inURL.deletingPathExtension().lastPathComponent
         if outExt == "txt" || outExt == "trm" {
-            try TextMacroFormat.export(result.events).write(to: outURL, atomically: true, encoding: .utf8)
+            try TextMacroFormat.export(normalizedEvents).write(to: outURL, atomically: true, encoding: .utf8)
         } else {
-            let macro = SavedMacro(name: name, events: result.events)
+            let macro = SavedMacro(name: name, events: normalizedEvents)
             let enc = JSONEncoder()
             enc.outputFormatting = [.prettyPrinted]
-            try enc.encode(macro).write(to: outURL)
+            try enc.encode(macro).write(to: outURL, options: .atomic)
         }
 
-        var msg = "TinyRecorder: converted \(result.events.count) events -> \(outURL.lastPathComponent)"
+        var msg = "TinyRecorder: converted \(normalizedEvents.count) events -> \(outURL.lastPathComponent)"
         if result.skipped > 0 { msg += " (\(result.skipped) skipped)" }
         if let w = result.warning { msg += "\n  warning: \(w)" }
         FileHandle.standardOutput.write(Data((msg + "\n").utf8))
