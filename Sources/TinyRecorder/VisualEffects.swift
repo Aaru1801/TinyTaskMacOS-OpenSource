@@ -359,6 +359,7 @@ struct RecDot: View {
     var size: CGFloat = 8
     var color: Color = Brand.red500
     var glassWhite: Bool = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pulse = false
 
     var body: some View {
@@ -366,16 +367,19 @@ struct RecDot: View {
         ZStack {
             Circle()
                 .stroke(c.opacity(0.55), lineWidth: 1.5)
-                .scaleEffect(pulse ? 2.2 : 1.0)
-                .opacity(pulse ? 0 : 0.8)
+                .scaleEffect(!reduceMotion && pulse ? 2.2 : 1.0)
+                .opacity(reduceMotion ? 0.45 : (pulse ? 0 : 0.8))
             Circle()
                 .fill(c)
                 .shadow(color: c.opacity(0.6), radius: size * 0.6)
         }
         .frame(width: size, height: size)
-        .onAppear {
-            withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) { pulse = true }
-        }
+        .onAppear { pulse = !reduceMotion }
+        .onChange(of: reduceMotion) { _, reduced in pulse = !reduced }
+        .animation(
+            reduceMotion ? nil : .easeOut(duration: 1.6).repeatForever(autoreverses: false),
+            value: pulse
+        )
         .accessibilityHidden(true)
     }
 }

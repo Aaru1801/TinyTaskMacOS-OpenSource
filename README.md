@@ -6,7 +6,16 @@ macOS doesn't ship a built-in macro recorder — TinyRecorder is one. No subscri
 
 [**⬇ Download the latest release**](https://github.com/Aaru1801/TinyTask-macOS/releases/latest)
 
-Unzip `TinyRecorder.app.zip`, drag into `/Applications`, and launch. The app walks you through permissions on first launch.
+Unzip `TinyRecorder-1.9.0.zip`, drag TinyRecorder into `/Applications`, and launch. The app walks you through permissions on first launch.
+
+## What's in 1.9 — "Quick Run & Live Activity"
+
+- ⚡ **Quick Run** — press **⌘K** for a Spotlight-style command palette with fuzzy macro search, arrow-key navigation, shortcuts, and instant access to recording, import, editing, and settings.
+- 📊 **Finder-style Activity Center** — live recording/countdown state plus playback progress, loop and event counts, percentage, and time remaining in one compact control surface.
+- 🧊 **Compact native workspace** — a tighter utility-sized library, dimensional hover/press motion, active-card playback rails, refined empty states, and full Reduce Motion support.
+- 🟢 **Progress everywhere** — the playing card, menu-bar item, Dock badge, and Activity Center stay synchronized with percentage or continuous-loop status.
+- 🛡️ **Safer playback** — TinyRecorder clears its own windows before synthetic input, cancels exposed panels, releases held keys/buttons on every exit path, and stops playback before reopening interactive UI.
+- ⚙️ **Faster, safer internals** — non-blocking playback telemetry, coalesced private library saves, hardened imports, bounded loop counts, and owner-only macro files.
 
 ## What's in 1.7 — "Design system"
 
@@ -15,7 +24,7 @@ Implemented the Claude Design redesign as a shared design system:
 - 🔤 **Refined typography & numerics** — italic-serif "tiny" wordmark, monospaced timestamps/counters, tracked small-caps section labels.
 - ⌨️ **Chiseled keycaps** (with a glass variant on the HUD) and a **pulsing record dot**.
 - 🟥 **Reel-and-smile brand mark** rendered natively.
-- 📋 **Library** — brand row + status, full-width record button with the record-hotkey keycap, ⌘K search, restrained accent on cards.
+- 📋 **Library** — brand row + status, full-width record button with the record-hotkey keycap, ⌘F search, restrained accent on cards.
 - 🎬 **Recording HUD** — inky Liquid Glass over the live desktop: gradient mono timer, event-track panel with time ruler, a 4-stat grid (clicks/keys/scroll/drag), and Discard/Stop with keycap chords.
 
 ## What's in 1.6 — "Liquid Glass"
@@ -35,7 +44,7 @@ Implemented the Claude Design redesign as a shared design system:
 - 📊 **Stats** — every card shows play count and last-played; sidebar shows total plays & time replayed
 - 🔗 **Macro chains** — when one macro finishes, automatically play another
 - ⏳ **Pre-record countdown** — a big floating "3 · 2 · 1" overlay so you have time to switch to the right window
-- 🔔 **Dock badge** — pulsing red dot while recording, ▶ while playing
+- 🔔 **Dock badge** — pulsing red dot while recording, live percentage or ∞ while playing
 - 🔊 **Sound feedback** — optional subtle audio cues on record / play / stop (off by default)
 - ✏️ **Editor: insert wait** — add a precise pause anywhere in the timeline
 - 🎬 **Floating recording HUD** — live timer, event counter, click/key/scroll breakdown, mini live waveform
@@ -75,6 +84,8 @@ Each card has small chips for hotkey, loop count, favorite ★, and a **⋯** me
 | Record / Stop recording | **F6** | toggle |
 | Stop everything | **F7** | aborts recording or playback |
 | Play current macro | **F8** | uses the macro's own loop count |
+| Quick Run | **⌘K** | fuzzy macro and command palette |
+| Search library | **⌘F** | focuses the library search field |
 | New recording | **⌘R** | from menu / popover |
 | Play | **⌘P** | menu shortcut |
 | Stop | **⌘.** | menu shortcut |
@@ -159,7 +170,7 @@ The output format is chosen by the output file's extension (`.tinyrec`/`.json` o
 
 Build with `./build.sh` — it compiles the SwiftPM package, assembles `TinyRecorder.app`, stamps the build number from git, and ad-hoc signs so Accessibility approval sticks across rebuilds. Sources live in `Sources/TinyRecorder/`.
 
-Requires the macOS 26 SDK (Xcode 26+) to compile the Liquid Glass layer; the app itself still runs back to macOS 13, where it falls back to standard vibrancy. The app must **not** be sandboxed — `CGEventTap` recording and `CGEvent` posting require it off.
+Requires the macOS 26 SDK (Xcode 26+) to compile the Liquid Glass layer; the app itself runs on macOS 14 or newer, with standard vibrancy on macOS 14–15. The app must **not** be sandboxed — `CGEventTap` recording and `CGEvent` posting require it off.
 
 ## Architecture
 
@@ -178,6 +189,8 @@ Requires the macOS 26 SDK (Xcode 26+) to compile the Liquid Glass layer; the app
 | `WelcomeWindow.swift` | Onboarding wizard |
 | `MacroEditor.swift` | Timeline + table + inspector editor |
 | `PopoverContentView.swift` | Library UI (popover & main window) |
+| `ActivityCenterView.swift` | Live recording/countdown/playback progress surface |
+| `QuickRunPalette.swift` | ⌘K fuzzy macro and command launcher |
 | `SoundController.swift` | Optional audio feedback |
 | `VisualEffects.swift` | Materials, hover styles, brand mark, key-cap chip |
 | `AppState.swift` | UserDefaults-backed settings + permission watcher |

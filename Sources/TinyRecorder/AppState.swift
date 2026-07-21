@@ -5,7 +5,7 @@ import ApplicationServices
 import IOKit.hid
 
 /// Simple key code description used for hotkey labels.
-struct HotkeyBinding: Codable, Equatable {
+struct HotkeyBinding: Codable, Equatable, Sendable {
     var keyCode: UInt32
     var name: String
 }
@@ -53,6 +53,11 @@ final class AppState: ObservableObject {
     @Published var showRecordingHUD: Bool {
         didSet { UserDefaults.standard.set(showRecordingHUD, forKey: "showRecordingHUD") }
     }
+    /// Orders TinyRecorder's own windows out before synthetic input begins, so
+    /// recorded coordinates can never click the library/editor that launched it.
+    @Published var hideDuringPlayback: Bool {
+        didSet { UserDefaults.standard.set(hideDuringPlayback, forKey: "hideDuringPlayback") }
+    }
     /// Has the user finished onboarding?
     @Published var onboardingComplete: Bool {
         didSet { UserDefaults.standard.set(onboardingComplete, forKey: "onboardingComplete") }
@@ -67,7 +72,7 @@ final class AppState: ObservableObject {
 
     init() {
         let d = UserDefaults.standard
-        self.loops = d.object(forKey: "loops") as? Int ?? 1
+        self.loops = normalizedLoopCount(d.object(forKey: "loops") as? Int ?? 1)
         self.speed = d.object(forKey: "speed") as? Double ?? 1.0
         self.recordHotkey = AppState.load(key: "hk_record")
             ?? HotkeyBinding(keyCode: KeyCode.f6, name: "F6")
@@ -79,6 +84,7 @@ final class AppState: ObservableObject {
         self.countdownSeconds = d.object(forKey: "countdownSeconds") as? Int ?? 3
         self.soundEnabled = d.object(forKey: "soundEnabled") as? Bool ?? false
         self.showRecordingHUD = d.object(forKey: "showRecordingHUD") as? Bool ?? true
+        self.hideDuringPlayback = d.object(forKey: "hideDuringPlayback") as? Bool ?? true
         self.onboardingComplete = d.object(forKey: "onboardingComplete") as? Bool ?? false
         self.menuBarOnly = d.object(forKey: "menuBarOnly") as? Bool ?? false
 

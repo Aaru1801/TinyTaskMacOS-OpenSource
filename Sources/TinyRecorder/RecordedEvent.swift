@@ -1,8 +1,16 @@
 import Foundation
 import CoreGraphics
 
-struct RecordedEvent: Codable, Equatable {
-    enum Kind: Int, Codable {
+struct RecordedEvent: Codable, Equatable, Sendable {
+    /// Defensive bounds for hand-edited/imported macro files. Values outside
+    /// these ranges cannot describe a practical macOS recording and can make
+    /// downstream integer formatting or Core Graphics conversion trap.
+    private static let maximumTime: TimeInterval = 7 * 24 * 60 * 60
+    private static let maximumCoordinate: CGFloat = 1_000_000
+    private static let maximumMouseButton: Int64 = 31
+    private static let maximumClickCount: Int64 = 16
+
+    enum Kind: Int, Codable, Sendable {
         case leftMouseDown      = 1
         case leftMouseUp        = 2
         case rightMouseDown     = 3
@@ -61,9 +69,15 @@ struct RecordedEvent: Codable, Equatable {
         events.enumerated().compactMap { offset, event -> (Int, RecordedEvent)? in
             guard event.time.isFinite else { return nil }
             var event = event
-            event.time = max(0, event.time)
-            if !event.x.isFinite { event.x = 0 }
-            if !event.y.isFinite { event.y = 0 }
+            event.time = max(0, min(Self.maximumTime, event.time))
+            event.x = event.x.isFinite
+                ? max(-Self.maximumCoordinate, min(Self.maximumCoordinate, event.x))
+                : 0
+            event.y = event.y.isFinite
+                ? max(-Self.maximumCoordinate, min(Self.maximumCoordinate, event.y))
+                : 0
+            event.mouseButton = max(0, min(Self.maximumMouseButton, event.mouseButton))
+            event.clickCount = max(0, min(Self.maximumClickCount, event.clickCount))
             return (offset, event)
         }
         .sorted { lhs, rhs in

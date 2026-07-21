@@ -248,6 +248,25 @@ final class Recorder: ObservableObject {
 
         guard let kind = RecordedEvent.Kind(rawValue: Int(type.rawValue)) else { return }
 
+        // Never capture interaction with TinyRecorder itself. In particular, the
+        // floating HUD's Stop button is delivered to the global event tap before
+        // its SwiftUI action stops the recorder; without this guard every macro
+        // stopped from the HUD ended with a click at the HUD's screen position.
+        //
+        // First do a cheap frame test so the Window Server hit-test is only used
+        // while the pointer is actually over one of our visible windows. The
+        // second test matters when another app's window is in front of ours:
+        // NSWindow.windowNumber(at:belowWindowWithWindowNumber:) returns the real
+        // frontmost window that would receive a mouse-down, even across processes.
+        if (kind.isMouse || kind == .scrollWheel), pointerIsOverOwnedWindow() {
+            return
+        }
+
+        // A menu-bar popover can activate TinyRecorder during capture without
+        // occupying the pointer's eventual key-event location. Never serialize
+        // typing or shortcuts while this app itself owns keyboard focus.
+        if kind.isKey, NSApp.isActive { return }
+
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         if kind.isKey, ignoredKeyCodes.contains(keyCode) { return }
 
@@ -275,5 +294,21 @@ final class Recorder: ObservableObject {
         } else {
             DispatchQueue.main.async { self.pending.append(recorded) }
         }
+    }
+
+    /// Whether the frontmost mouse-receiving window under the pointer belongs to
+    /// this process. Recorder callbacks normally run on the main run loop, which
+    /// is also the only thread on which AppKit window state may be inspected.
+    private func pointerIsOverOwnedWindow() -> Bool {
+        guard Thread.isMainThread else { return false }
+        let point = NSEvent.mouseLocation
+        guard NSApp.windows.contains(where: { $0.isVisible && $0.frame.contains(point) }) else {
+            return false
+        }
+        let windowNumber = NSWindow.windowNumber(
+            at: point,
+            belowWindowWithWindowNumber: 0
+        )
+        return windowNumber != 0 && NSApp.window(withWindowNumber: windowNumber) != nil
     }
 }

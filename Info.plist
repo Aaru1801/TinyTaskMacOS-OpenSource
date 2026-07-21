@@ -38,7 +38,6 @@
 			<key>CFBundleTypeExtensions</key>
 			<array>
 				<string>trm</string>
-				<string>txt</string>
 			</array>
 			<key>CFBundleTypeName</key>
 			<string>TinyRecorder Text Macro</string>
@@ -46,6 +45,10 @@
 			<string>Editor</string>
 			<key>LSHandlerRank</key>
 			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.tinyrecorder.text-macro</string>
+			</array>
 		</dict>
 	</array>
 	<key>CFBundleExecutable</key>
@@ -61,7 +64,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.8.1</string>
+	<string>1.9.0</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
@@ -94,6 +97,23 @@
 				<key>public.filename-extension</key>
 				<array>
 					<string>tinyrec</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.plain-text</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>TinyRecorder Text Macro</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.tinyrecorder.text-macro</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>trm</string>
 				</array>
 			</dict>
 		</dict>

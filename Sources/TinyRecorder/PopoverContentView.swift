@@ -38,6 +38,7 @@ struct PopoverContentView: View {
     @State private var newTagText: String = ""
     @State private var notesDraft: String = ""
     @State private var isDroppingFiles = false
+    @State private var showQuickRun = false
     @FocusState private var searchFocused: Bool
     /// Deterministic anchor for shift-click range selection.
     @State private var lastAnchorID: UUID?
@@ -48,59 +49,77 @@ struct PopoverContentView: View {
 
     var body: some View {
         ZStack {
-            VisualEffectBackground(material: isWindow ? .windowBackground : .popover, blendingMode: .behindWindow)
-                .ignoresSafeArea()
+            ZStack {
+                VisualEffectBackground(material: isWindow ? .windowBackground : .popover, blendingMode: .behindWindow)
+                    .ignoresSafeArea()
 
-            if isWindow {
-                VStack(spacing: 0) {
-                    // Custom titlebar strip: wordmark centered, traffic lights
-                    // live in the leading inset.
+                if isWindow {
+                    VStack(spacing: 0) {
+                        // Custom titlebar strip: wordmark centered, traffic lights
+                        // live in the leading inset.
+                        ZStack {
+                            Wordmark(size: 12)
+                        }
+                        .frame(height: 32)
+                        .frame(maxWidth: .infinity)
+                        .background(VisualEffectBackground(material: .titlebar, blendingMode: .withinWindow))
+                        .overlay(Divider().opacity(0.5), alignment: .bottom)
+
+                        HStack(spacing: 0) {
+                            LibrarySidebar(controller: controller, filter: $filter)
+                                .frame(width: 160)
+                            Divider().opacity(0.5)
+                            libraryColumn
+                        }
+                    }
+                } else {
+                    libraryColumn
+                }
+
+                // File-drop overlay (shown only while user is dragging macro files in)
+                if isDroppingFiles {
                     ZStack {
-                        Wordmark(size: 12)
+                        Color.accentColor.opacity(0.10)
+                        VStack(spacing: 10) {
+                            Image(systemName: "arrow.down.doc.fill")
+                                .font(.system(size: 38, weight: .semibold))
+                                .foregroundStyle(.tint)
+                            Text("Drop to import")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.primary)
+                            Text("Drop a .tinyrec, TinyTask .rec, or .txt macro.")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(20)
                     }
-                    .frame(height: 32)
-                    .frame(maxWidth: .infinity)
-                    .background(VisualEffectBackground(material: .titlebar, blendingMode: .withinWindow))
-                    .overlay(Divider().opacity(0.5), alignment: .bottom)
-
-                    HStack(spacing: 0) {
-                        LibrarySidebar(controller: controller, filter: $filter)
-                            .frame(width: 160)
-                        Divider().opacity(0.5)
-                        libraryColumn
-                    }
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(
+                                Color.accentColor.opacity(0.7),
+                                style: StrokeStyle(lineWidth: 2, dash: [6, 4])
+                            )
+                            .padding(8)
+                    )
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
                 }
-            } else {
-                libraryColumn
             }
+            .allowsHitTesting(!showQuickRun)
+            .accessibilityHidden(showQuickRun)
 
-            // File-drop overlay (shown only while user is dragging .tinyrec files in)
-            if isDroppingFiles {
-                ZStack {
-                    Color.accentColor.opacity(0.10)
-                    VStack(spacing: 10) {
-                        Image(systemName: "arrow.down.doc.fill")
-                            .font(.system(size: 38, weight: .semibold))
-                            .foregroundStyle(.tint)
-                        Text("Drop to import")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.primary)
-                        Text("Drop a .tinyrec, TinyTask .rec, or .txt macro.")
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(20)
-                }
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(
-                            Color.accentColor.opacity(0.7),
-                            style: StrokeStyle(lineWidth: 2, dash: [6, 4])
-                        )
-                        .padding(8)
+            if showQuickRun {
+                QuickRunPalette(
+                    controller: controller,
+                    compact: !isWindow,
+                    onDismiss: { withAnimation(Brand.spring) { showQuickRun = false } }
                 )
-                .transition(.opacity)
-                .allowsHitTesting(false)
+                .environmentObject(recorder)
+                .environmentObject(player)
+                .environmentObject(state)
+                .environmentObject(library)
+                .transition(.scale(scale: 0.965).combined(with: .opacity))
+                .zIndex(100)
             }
         }
         .frame(
@@ -119,6 +138,11 @@ struct PopoverContentView: View {
         .onChange(of: filter) { selection.removeAll() }
         .onReceive(NotificationCenter.default.publisher(for: MenuBarController.focusSearchNotification)) { _ in
             searchFocused = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: MenuBarController.quickRunNotification)) { notification in
+            guard let targetIsWindow = (notification.object as? NSNumber)?.boolValue,
+                  targetIsWindow == isWindow else { return }
+            withAnimation(Brand.spring) { showQuickRun = true }
         }
         .sheet(item: $showAssignHotkey) { macro in
             HotkeyAssignmentSheet(
@@ -199,13 +223,22 @@ struct PopoverContentView: View {
                 search: $search,
                 searchFocused: $searchFocused,
                 isWindow: isWindow,
-                macroCount: library.macros.count
+                macroCount: library.macros.count,
+                onQuickRun: { withAnimation(Brand.spring) { showQuickRun = true } }
             )
             .padding(.horizontal, isWindow ? 10 : 12)
             .padding(.top, isWindow ? 9 : 10)
             .padding(.bottom, isWindow ? 9 : 7)
             .background(Color.primary.opacity(isWindow ? 0.018 : 0))
             .overlay(Divider().opacity(isWindow ? 0.35 : 0), alignment: .bottom)
+
+            if hasLiveActivity {
+                ActivityCenterView(controller: controller, compact: !isWindow)
+                    .padding(.horizontal, isWindow ? 10 : 12)
+                    .padding(.top, 8)
+                    .padding(.bottom, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
 
             #if !HIDE_PERMISSION_BANNER
             if !state.accessibilityGranted || !state.inputMonitoringGranted {
@@ -249,7 +282,9 @@ struct PopoverContentView: View {
                     .padding(.bottom, 8)
             }
 
-            if filteredMacros.isEmpty {
+            if filteredMacros.isEmpty && hasLiveActivity {
+                Spacer(minLength: 0)
+            } else if filteredMacros.isEmpty {
                 EmptyState(
                     filter: filter,
                     hasSearch: !search.isEmpty,
@@ -292,9 +327,16 @@ struct PopoverContentView: View {
                         spacing: 8
                     ) {
                         ForEach(filteredMacros) { macro in
+                            let activePlayback = player.isPlaying && macro.id == controller.playingMacroID
                             MacroCard(
                                 macro: macro,
                                 isCurrent: macro.id == library.currentMacroID,
+                                isPlaying: activePlayback,
+                                playProgress: activePlayback
+                                    ? (player.isContinuous ? player.progress : player.overallProgress)
+                                    : 0,
+                                currentLoop: activePlayback ? player.currentLoop : 0,
+                                totalLoops: activePlayback ? player.totalLoops : 1,
                                 isSelected: selection.contains(macro.id),
                                 isRenaming: renamingID == macro.id,
                                 renameText: $renameText,
@@ -303,7 +345,11 @@ struct PopoverContentView: View {
                                 },
                                 onPlay: {
                                     selection.removeAll()
-                                    controller.playMacroByID(macro.id)
+                                    if activePlayback {
+                                        controller.stopAll()
+                                    } else {
+                                        controller.playMacroByID(macro.id)
+                                    }
                                 },
                                 onEdit: {
                                     selection.removeAll()
@@ -366,7 +412,7 @@ struct PopoverContentView: View {
             }
 
             // Transient status / feedback line (auto-clears).
-            if !state.statusMessage.isEmpty {
+            if !state.statusMessage.isEmpty && !hasLiveActivity {
                 HStack(spacing: 6) {
                     Image(systemName: "info.circle")
                         .font(.system(size: 10))
@@ -404,6 +450,10 @@ struct PopoverContentView: View {
                 withAnimation(.easeOut(duration: 0.25)) { state.statusMessage = "" }
             }
         }
+    }
+
+    private var hasLiveActivity: Bool {
+        state.recordingCountdownActive || recorder.isRecording || player.isPlaying
     }
 
     /// Selection restricted to what the current filter/search actually shows —
@@ -584,6 +634,7 @@ private struct LibraryHeader: View {
     var searchFocused: FocusState<Bool>.Binding
     let isWindow: Bool
     let macroCount: Int
+    let onQuickRun: () -> Void
     @EnvironmentObject var recorder: Recorder
     @EnvironmentObject var player: Player
     @EnvironmentObject var state: AppState
@@ -644,6 +695,7 @@ private struct LibraryHeader: View {
                     .fixedSize()
 
                     Spacer(minLength: 4)
+                    quickRunButton
                     searchField
                         .frame(minWidth: 110, idealWidth: 190, maxWidth: 240)
                         .layoutPriority(1)
@@ -656,6 +708,7 @@ private struct LibraryHeader: View {
                     compactRecordButton
                         .frame(maxWidth: .infinity)
                     playbackButton
+                    quickRunButton
                     importButton
                 }
                 HStack(spacing: 8) {
@@ -706,6 +759,18 @@ private struct LibraryHeader: View {
         }
     }
 
+    private var quickRunButton: some View {
+        headerIconButton(
+            systemImage: "bolt.fill",
+            tint: Brand.sigViolet,
+            help: recorder.isRecording || state.recordingCountdownActive
+                ? "Quick Run is unavailable during recording"
+                : "Quick Run (⌘K)",
+            disabled: recorder.isRecording || state.recordingCountdownActive,
+            action: onQuickRun
+        )
+    }
+
     private func headerIconButton(
         systemImage: String,
         tint: Color,
@@ -754,7 +819,7 @@ private struct LibraryHeader: View {
                 .font(.system(size: 12))
                 .focused(searchFocused)
             if search.isEmpty {
-                KeyCapView(text: "⌘K", size: .sm)
+                KeyCapView(text: "⌘F", size: .sm)
             } else {
                 Button { search = "" } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -850,6 +915,10 @@ private struct SelectionToolbar: View {
 private struct MacroCard: View {
     let macro: SavedMacro
     let isCurrent: Bool
+    let isPlaying: Bool
+    let playProgress: Double
+    let currentLoop: Int
+    let totalLoops: Int
     let isSelected: Bool
     let isRenaming: Bool
     @Binding var renameText: String
@@ -894,6 +963,7 @@ private struct MacroCard: View {
     }
 
     private var strokeColor: Color {
+        if isPlaying { return cardAccentColor(for: macro.accent).opacity(0.95) }
         if isCurrent { return cardAccentColor(for: macro.accent).opacity(0.55) }
         if isSelected { return Brand.sigBlue.opacity(0.85) }
         if dragOver { return Color.accentColor.opacity(0.6) }
@@ -969,8 +1039,27 @@ private struct MacroCard: View {
             .background { cardBackground }
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(strokeColor, lineWidth: (isCurrent || isSelected) ? 1.2 : 0.5)
+                    .strokeBorder(strokeColor, lineWidth: (isPlaying || isCurrent || isSelected) ? 1.2 : 0.5)
             )
+            .overlay(alignment: .bottomLeading) {
+                if isPlaying {
+                    GeometryReader { proxy in
+                        Capsule(style: .continuous)
+                            .fill(LinearGradient(
+                                colors: [cardAccentColor(for: macro.accent).opacity(0.75),
+                                         cardAccentColor(for: macro.accent)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            ))
+                            .frame(width: max(5, proxy.size.width * max(0, min(1, playProgress))), height: 2.5)
+                            .shadow(color: cardAccentColor(for: macro.accent).opacity(0.45), radius: 3)
+                            .animation(.linear(duration: 0.10), value: playProgress)
+                    }
+                    .frame(height: 2.5)
+                    .padding(.horizontal, 4)
+                    .padding(.bottom, 1.5)
+                }
+            }
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(Color.accentColor.opacity(cardFocused ? 0.9 : 0), lineWidth: 2.5)
@@ -998,7 +1087,7 @@ private struct MacroCard: View {
         let tint = cardAccentColor(for: macro.accent)
         ZStack {
             shape.fill(Color(nsColor: .controlBackgroundColor))
-            shape.fill(tint.opacity(isCurrent ? 0.055 : (isSelected ? 0.10 : 0)))
+            shape.fill(tint.opacity(isPlaying ? 0.10 : (isCurrent ? 0.055 : (isSelected ? 0.10 : 0))))
         }
     }
 
@@ -1090,7 +1179,11 @@ private struct MacroCard: View {
             }
 
             // Tiny waveform
-            MiniWaveform(events: macro.events)
+            MiniWaveform(
+                events: macro.events,
+                progress: isPlaying ? playProgress : nil,
+                progressTint: cardAccentColor(for: macro.accent)
+            )
                 .frame(height: 16)
 
             // Tags row (if any)
@@ -1119,8 +1212,12 @@ private struct MacroCard: View {
             HStack(spacing: 4) {
                 metaRow
                 Spacer()
-                CardActionButton(systemImage: "play.fill", tint: .green, label: "Play \(macro.name)") { onPlay() }
-                    .help("Play")
+                CardActionButton(
+                    systemImage: isPlaying ? "stop.fill" : "play.fill",
+                    tint: isPlaying ? Brand.red500 : Brand.sigGreen,
+                    label: isPlaying ? "Stop \(macro.name)" : "Play \(macro.name)"
+                ) { onPlay() }
+                    .help(isPlaying ? "Stop" : "Play")
                 LoopChip(loops: macro.loops, onChange: onSetLoops)
                 CardActionButton(systemImage: "slider.horizontal.below.rectangle", tint: .blue, label: "Edit \(macro.name)") { onEdit() }
                     .help("Edit")
@@ -1179,9 +1276,20 @@ private struct MacroCard: View {
     @ViewBuilder
     private var metaRow: some View {
         HStack(spacing: 4) {
-            Text(durationText)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundStyle(.secondary)
+            if isPlaying {
+                Image(systemName: "waveform.path")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(cardAccentColor(for: macro.accent))
+                    .symbolEffect(.variableColor.iterative, options: .repeating)
+                Text(totalLoops > 0 ? "\(max(1, currentLoop))/\(totalLoops)" : "loop \(max(1, currentLoop))")
+                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(cardAccentColor(for: macro.accent))
+                    .contentTransition(.numericText())
+            } else {
+                Text(durationText)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
             if abs(macro.speed - 1.0) > 0.01 {
                 Text(formatSpeed(macro.speed))
                     .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
@@ -1370,6 +1478,8 @@ private struct CardActionButton: View {
 
 struct MiniWaveform: View {
     let events: [RecordedEvent]
+    var progress: Double? = nil
+    var progressTint: Color = Brand.sigGreen
 
     var body: some View {
         GeometryReader { geo in
@@ -1394,6 +1504,19 @@ struct MiniWaveform: View {
                             height: b.isImpact ? h * 0.95 : h * 0.45
                         )
                         .offset(x: b.x)
+                }
+
+                if let progress {
+                    let clamped = max(0, min(1, progress))
+                    Rectangle()
+                        .fill(progressTint.opacity(0.10))
+                        .frame(width: w * clamped, height: h)
+                    RoundedRectangle(cornerRadius: 1, style: .continuous)
+                        .fill(progressTint)
+                        .frame(width: 1.5, height: h)
+                        .offset(x: max(0, w * clamped - 1))
+                        .shadow(color: progressTint.opacity(0.55), radius: 2)
+                        .animation(.linear(duration: 0.10), value: clamped)
                 }
             }
         }
@@ -1667,7 +1790,7 @@ struct LoopChip: View {
             Button("Set") {
                 let trimmed = customText.trimmingCharacters(in: .whitespaces)
                 if trimmed.isEmpty || trimmed == "∞" { onChange(0) }
-                else if let n = Int(trimmed) { onChange(max(0, n)) }
+                else if let n = Int(trimmed) { onChange(normalizedLoopCount(n)) }
             }
         } message: {
             Text("Enter a number, or 0 (or leave blank) for continuous.")
@@ -1967,7 +2090,7 @@ struct SettingsPanel: View {
             Button("Set") {
                 let trimmed = customLoopText.trimmingCharacters(in: .whitespaces)
                 if trimmed.isEmpty || trimmed == "∞" { state.loops = 0 }
-                else if let n = Int(trimmed) { state.loops = max(0, n) }
+                else if let n = Int(trimmed) { state.loops = normalizedLoopCount(n) }
             }
         } message: {
             Text("Enter a number, or 0 (or leave blank) for continuous.")
@@ -2093,6 +2216,14 @@ struct SettingsPanel: View {
                 .labelsHidden()
                 .frame(width: 100)
             }
+            Toggle("Hide TinyRecorder while playing", isOn: $state.hideDuringPlayback)
+                .font(.system(size: 11.5))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+            Text("Prevents recorded coordinates from clicking TinyRecorder's own windows.")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

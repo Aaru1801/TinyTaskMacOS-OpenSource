@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 final class MenuBarController: NSObject, NSPopoverDelegate {
     static let focusSearchNotification = Notification.Name("TinyRecorder.focusSearch")
+    static let quickRunNotification = Notification.Name("TinyRecorder.quickRun")
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
     private var globalClickMonitor: Any?
@@ -23,7 +24,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var perMacroHotkeyIDs: [UInt32: UUID] = [:]   // hotkey-id → macro id
     private var dockBadgeTimer: Timer?
     private var playStartTime: CFAbsoluteTime = 0
-    private var playingMacroID: UUID?
+    private(set) var playingMacroID: UUID?
+    /// Playback starts after a tiny window-dismissal grace period. A generation
+    /// token makes that pending launch cancellable, so Stop can never race a
+    /// delayed synthetic-input session back to life.
+    private var playbackRequestGeneration: UInt64 = 0
+    private var playbackPending = false
     /// Macros already visited in the current chain run — breaks A→B→A cycles.
     private var chainVisited: Set<UUID> = []
     private var settingsWC: SettingsWindowController?
@@ -71,6 +77,24 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.refreshIcon(); self?.updateDockBadge() }
             .store(in: &cancellables)
+        // Finder-style live progress in the menu bar and Dock. Collapse the
+        // 30 Hz player updates to integer percentages before touching AppKit.
+        player.$progress
+            .map { Int(($0 * 100).rounded(.down)) }
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.refreshIcon(); self?.updateDockBadge() }
+            .store(in: &cancellables)
+        player.$currentLoop
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.refreshIcon(); self?.updateDockBadge() }
+            .store(in: &cancellables)
+        player.$totalLoops
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.refreshIcon(); self?.updateDockBadge() }
+            .store(in: &cancellables)
     }
 
     private func refreshIcon() {
@@ -81,12 +105,23 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             button.setAccessibilityLabel("TinyRecorder — recording")
         } else if player.isPlaying {
             button.image = TinyIcons.playing
-            button.title = ""
-            button.setAccessibilityLabel("TinyRecorder — playing")
+            button.title = player.isContinuous
+                ? " ∞"
+                : " \(Int((player.overallProgress * 100).rounded(.down)))%"
+            let loop = max(1, player.currentLoop)
+            let detail = player.isContinuous
+                ? "continuous playback, loop \(loop)"
+                : "\(Int((player.overallProgress * 100).rounded(.down))) percent, loop \(loop) of \(max(1, player.totalLoops))"
+            button.setAccessibilityLabel("TinyRecorder — playing, \(detail)")
+            let playingName = playingMacroID
+                .flatMap { id in library.macros.first(where: { $0.id == id })?.name }
+                ?? "macro"
+            button.toolTip = "Playing \(playingName) — \(detail)"
         } else {
             button.image = TinyIcons.idle
             button.title = ""
             button.setAccessibilityLabel("TinyRecorder")
+            button.toolTip = "TinyRecorder"
         }
     }
 
@@ -97,7 +132,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             startBadgePulse()
         } else if player.isPlaying {
             stopBadgePulse()
-            tile.badgeLabel = "▶"
+            tile.badgeLabel = player.isContinuous
+                ? "∞"
+                : "\(Int((player.overallProgress * 100).rounded(.down)))%"
         } else {
             stopBadgePulse()
             tile.badgeLabel = nil
@@ -144,6 +181,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     private func showPopover() {
+        stopPlaybackBeforePresenting("TinyRecorder")
         guard let button = statusItem.button else { return }
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.becomeKey()
@@ -244,7 +282,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         globalHotkeyIDs.removeAll()
 
         let recordH: () -> Void = { [weak self] in self?.toggleRecording() }
-        let stopH:   () -> Void = { [weak self] in self?.stopAll() }
+        let stopH:   () -> Void = { [weak self] in self?.emergencyStop() }
         let playH:   () -> Void = { [weak self] in self?.play() }
 
         if let id = HotkeyManager.shared.register(keyCode: state.recordHotkey.keyCode, handler: recordH) {
@@ -406,6 +444,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             countdown.cancel()
             state.recordingCountdownActive = false
             state.statusMessage = "Recording cancelled."
+            performHaptic(.alignment)
             return
         }
         if recorder.isRecording {
@@ -415,8 +454,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 let newMacro = library.add(events: recorder.events, loops: state.loops)
                 state.statusMessage = "Saved \(newMacro.name) · \(count) events."
                 SoundController.shared.play(.recordStop)
+                performHaptic(.levelChange)
             } else {
                 state.statusMessage = "No events captured."
+                performHaptic(.alignment)
                 // Don't leave an empty buffer that a later persist would write
                 // over the selected macro — restore it.
                 if let m = library.currentMacro {
@@ -438,9 +479,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             SoundController.shared.play(.error)
             return
         }
-        if player.isPlaying { stopPlayback() }
+        if player.isPlaying || playbackPending { stopPlayback() }
         persistCurrentMacroIfNeeded()
-        if popover.isShown { popover.performClose(nil) }
+        prepareInterfaceForCapture()
 
         let secs = state.countdownSeconds
         if secs > 0 {
@@ -467,6 +508,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             if state.showRecordingHUD { hud?.show() }
             state.statusMessage = "Recording…"
             SoundController.shared.play(.recordStart)
+            performHaptic(.generic)
         } else {
             state.statusMessage = "Could not start recording. Check Input Monitoring permission."
             SoundController.shared.play(.error)
@@ -477,16 +519,34 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         countdown?.cancel()
         state.recordingCountdownActive = false
         if recorder.isRecording {
-            // F7 = "abort". Throw away the in-flight recording instead of saving.
-            cancelRecording()
+            // The native File → Stop command is a normal stop: preserve the
+            // recording exactly like the HUD's Stop button does.
+            toggleRecording()
             return
         }
-        if player.isPlaying { stopPlayback() }
+        if player.isPlaying || playbackPending { stopPlayback() }
         state.statusMessage = "Stopped."
     }
 
+    /// The global stop hotkey is intentionally stronger than File → Stop. It is
+    /// the user's escape hatch from runaway playback and discards an in-flight
+    /// capture, matching the explicit "Discard" control in the recording HUD.
+    func emergencyStop() {
+        countdown?.cancel()
+        state.recordingCountdownActive = false
+        if recorder.isRecording {
+            cancelRecording()
+            return
+        }
+        if player.isPlaying || playbackPending { stopPlayback() }
+        state.statusMessage = "Emergency stop."
+    }
+
     private func stopPlayback() {
+        playbackRequestGeneration &+= 1
+        playbackPending = false
         player.stop()
+        performHaptic(.levelChange)
         playingMacroID = nil
         chainVisited.removeAll()
     }
@@ -512,69 +572,120 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             state.recordingCountdownActive = false
         }
         if recorder.isRecording { toggleRecording() }
-        if player.isPlaying { return }
+        if player.isPlaying || playbackPending { return }
         if !isChained { chainVisited.removeAll() }
         let macro = library.currentMacro
         let name = macro?.name ?? "macro"
         let loops = macro?.loops ?? state.loops
         let speed = macro?.speed ?? state.speed
+        let events = recorder.events
         state.statusMessage = loops <= 0
             ? "Playing \(name) on loop…"
             : "Playing \(name) · ×\(loops)…"
-        if popover.isShown { popover.performClose(nil) }
-        playStartTime = CFAbsoluteTimeGetCurrent()
         playingMacroID = macro?.id
         if let id = macro?.id { chainVisited.insert(id) }
-        SoundController.shared.play(.playStart)
-        // Completion arrives on the main actor. `finished` is false when the run
-        // was cancelled (stop hotkey, new playback, recording started) — in that
-        // case we skip stats, sounds, status, and most importantly the chain.
-        player.play(events: recorder.events, loops: loops, speed: speed) { [weak self] finished in
-            guard let self else { return }
-            // Look the chain up LIVE (not from the stale pre-playback copy) so
-            // clearing it mid-run is respected.
-            let chainID = self.playingMacroID.flatMap { pid in
-                self.library.macros.first(where: { $0.id == pid })?.chainTo
-            }
-            self.playingMacroID = nil
-            guard finished else { return }
 
-            let elapsed = CFAbsoluteTimeGetCurrent() - self.playStartTime
-            if let id = macro?.id {
-                self.library.recordPlay(id: id, runTime: elapsed)
-            }
-            SoundController.shared.play(.playEnd)
+        playbackRequestGeneration &+= 1
+        let request = playbackRequestGeneration
+        playbackPending = true
 
-            if let id = chainID, let next = self.library.macros.first(where: { $0.id == id }) {
-                guard !self.chainVisited.contains(id) else {
-                    self.state.statusMessage = "Chain stopped (loop detected)."
-                    return
+        let startPlayback = { [weak self] in
+            guard let self,
+                  self.playbackPending,
+                  self.playbackRequestGeneration == request else { return }
+            self.playbackPending = false
+            self.playStartTime = CFAbsoluteTimeGetCurrent()
+            SoundController.shared.play(.playStart)
+            self.performHaptic(.generic)
+
+            // Completion arrives on the main actor. `finished` is false when the
+            // run was cancelled — skip stats, sound, status, and the chain.
+            self.player.play(events: events, loops: loops, speed: speed) { [weak self] finished in
+                guard let self else { return }
+                // Look the chain up LIVE (not from the stale pre-playback copy)
+                // so clearing it mid-run is respected.
+                let chainID = self.playingMacroID.flatMap { pid in
+                    self.library.macros.first(where: { $0.id == pid })?.chainTo
                 }
-                self.state.statusMessage = "Chaining to \(next.name)…"
-                self.library.select(id: next.id)
-                self.recorder.loadEvents(next.events)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                self.playingMacroID = nil
+                guard finished else { return }
+
+                let elapsed = CFAbsoluteTimeGetCurrent() - self.playStartTime
+                if let id = macro?.id {
+                    self.library.recordPlay(id: id, runTime: elapsed)
+                }
+                SoundController.shared.play(.playEnd)
+                self.performHaptic(.alignment)
+
+                if let id = chainID, let next = self.library.macros.first(where: { $0.id == id }) {
+                    guard !self.chainVisited.contains(id) else {
+                        self.state.statusMessage = "Chain stopped (loop detected)."
+                        return
+                    }
+                    self.state.statusMessage = "Chaining to \(next.name)…"
+                    self.library.select(id: next.id)
+                    self.recorder.loadEvents(next.events)
                     self.play(isChained: true)
+                } else {
+                    self.state.statusMessage = "Playback finished."
                 }
-            } else {
-                self.state.statusMessage = "Playback finished."
             }
         }
+
+        if state.hideDuringPlayback && !isChained {
+            prepareInterfaceForPlayback()
+            // Let AppKit finish ordering windows out before the first CGEvent.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: startPlayback)
+        } else {
+            if popover.isShown { popover.performClose(nil) }
+            startPlayback()
+        }
+    }
+
+    private func prepareInterfaceForPlayback() {
+        prepareInterfaceForCapture()
+    }
+
+    /// Clear TinyRecorder's working surfaces out of the target app before either
+    /// recording or playback. This deliberately covers *every* app-owned window,
+    /// not just our known controllers: an open/save panel left in front could
+    /// otherwise receive synthetic typing or clicks from a global playback.
+    private func prepareInterfaceForCapture() {
+        if popover.isShown { popover.performClose(nil) }
+
+        // End modal sessions first so a cancelled panel cannot keep the app's
+        // main run loop nested after it has disappeared.
+        if NSApp.modalWindow != nil { NSApp.abortModal() }
+
+        for window in NSApp.windows.filter(\.isVisible) {
+            if let panel = window as? NSSavePanel {
+                panel.cancel(nil)
+            } else if let parent = window.sheetParent {
+                parent.endSheet(window, returnCode: .cancel)
+            }
+            window.orderOut(nil)
+        }
+    }
+
+    /// Interactive app surfaces must never appear over live synthetic input.
+    /// User-invoked panels stop playback first; the global stop hotkey remains
+    /// available when the app is hidden.
+    private func stopPlaybackBeforePresenting(_ destination: String) {
+        guard player.isPlaying || playbackPending else { return }
+        stopPlayback()
+        state.statusMessage = "Playback stopped to open \(destination)."
     }
 
     /// Play a specific saved macro by id (used by per-macro hotkeys + library card buttons).
     func playMacroByID(_ id: UUID) {
         guard let macro = library.macros.first(where: { $0.id == id }) else { return }
         if recorder.isRecording { toggleRecording() }
-        if player.isPlaying { stopPlayback() }
+        if player.isPlaying || playbackPending { stopPlayback() }
         persistCurrentMacroIfNeeded()
         chainVisited.removeAll()
         library.select(id: id)
         recorder.loadEvents(macro.events)
-        // Tiny delay to let state settle, then play.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            self?.play()
-        }
+        play()
     }
 
     // MARK: - Save / Open / Export
@@ -583,6 +694,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// or native `.tinyrec`/`.json`. Dispatches on extension, falling back to a
     /// content sniff so a mislabeled file still has a chance.
     func importMacro(at url: URL) {
+        stopPlaybackBeforePresenting("Import")
         // Finder drops and file-open events may arrive while a recording is
         // active. Save that capture before replacing the recorder buffer.
         if recorder.isRecording { toggleRecording() }
@@ -664,6 +776,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             state.statusMessage = "Nothing to export."
             return
         }
+        stopPlaybackBeforePresenting("Export")
         let panel = NSSavePanel()
         panel.title = "Export as Text"
         let baseName = library.currentMacro?.name ?? defaultMacroName()
@@ -690,6 +803,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// Export a specific macro (by id) as a `.txt` (TRM) file.
     func exportMacroAsText(_ id: UUID) {
         guard let macro = library.macros.first(where: { $0.id == id }) else { return }
+        stopPlaybackBeforePresenting("Export")
         let panel = NSSavePanel()
         panel.title = "Export \(macro.name) as Text"
         panel.nameFieldStringValue = safeFileName(macro.name) + ".txt"
@@ -712,6 +826,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     func open() {
+        stopPlaybackBeforePresenting("Import")
         let panel = NSOpenPanel()
         panel.title = "Import Macro"
         panel.message = "Import a TinyRecorder (.tinyrec), TinyTask (.rec), or text (.txt) macro."
@@ -761,6 +876,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             state.statusMessage = "Nothing to export."
             return
         }
+        stopPlaybackBeforePresenting("Export")
         let panel = NSSavePanel()
         panel.title = "Export as Shell Script"
         let baseName = library.currentMacro?.name ?? defaultMacroName()
@@ -797,10 +913,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                     echo "TinyRecorder binary not found at $EXEC. Please install TinyRecorder."
                     exit 1
                 fi
-                TMP=$(mktemp -t tinyrec).json
+                TMP=$(mktemp -t tinyrec)
+                trap 'rm -f "$TMP"' EXIT
                 echo "\(macroLine)" | base64 -D > "$TMP"
                 "$EXEC" --play "$TMP"
-                rm -f "$TMP"
                 """
                 try script.write(to: url, atomically: true, encoding: .utf8)
                 self.restrictPermissions(url, executable: true)
@@ -814,6 +930,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// Export a specific macro (from card menu).
     func exportMacroToFile(_ id: UUID) {
         guard let macro = library.macros.first(where: { $0.id == id }) else { return }
+        stopPlaybackBeforePresenting("Export")
         let panel = NSSavePanel()
         panel.title = "Export \(macro.name)"
         panel.nameFieldStringValue = safeFileName(macro.name) + ".tinyrec"
@@ -848,9 +965,14 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         return "macro-" + f.string(from: Date())
     }
 
+    private func performHaptic(_ pattern: NSHapticFeedbackManager.FeedbackPattern) {
+        NSHapticFeedbackManager.defaultPerformer.perform(pattern, performanceTime: .now)
+    }
+
     // MARK: - Editor
 
     func openEditor() {
+        stopPlaybackBeforePresenting("the editor")
         if popover.isShown { popover.performClose(nil) }
         if editorWC == nil {
             let view = EditorView(controller: self)
@@ -875,6 +997,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// Switch between Dock app (`.regular`) and menu-bar-only (`.accessory`) live.
     func setMenuBarOnly(_ menuBarOnly: Bool) {
         guard menuBarOnly != state.menuBarOnly else { return }
+        stopPlaybackBeforePresenting("appearance settings")
         state.menuBarOnly = menuBarOnly
         NSApp.setActivationPolicy(menuBarOnly ? .accessory : .regular)
         if menuBarOnly {
@@ -900,11 +1023,39 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// Opens the main library window (forwarded from AppDelegate so the controller
     /// can show it after an appearance switch).
     var showMainWindowHandler: (() -> Void)?
-    func showMainWindow() { showMainWindowHandler?() }
+    func showMainWindow() {
+        stopPlaybackBeforePresenting("the library")
+        showMainWindowHandler?()
+    }
+
+    /// Present Quick Run in the surface appropriate to the user's current app
+    /// mode, then notify that surface after AppKit has made it visible.
+    func presentQuickRun() {
+        guard !recorder.isRecording, !state.recordingCountdownActive else {
+            state.statusMessage = "Quick Run is unavailable during recording."
+            performHaptic(.alignment)
+            return
+        }
+        stopPlaybackBeforePresenting("Quick Run")
+        let targetIsWindow = !state.menuBarOnly
+        if state.menuBarOnly {
+            showPopoverProgrammatically()
+        } else {
+            if popover.isShown { popover.performClose(nil) }
+            showMainWindow()
+        }
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: Self.quickRunNotification,
+                object: NSNumber(value: targetIsWindow)
+            )
+        }
+    }
 
     // MARK: - Settings window
 
     func showSettingsWindow() {
+        stopPlaybackBeforePresenting("Settings")
         if popover.isShown { popover.performClose(nil) }
         if settingsWC == nil {
             settingsWC = SettingsWindowController(controller: self)
@@ -935,6 +1086,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     func showWelcome() {
+        stopPlaybackBeforePresenting("Welcome")
         // Force-show even if already complete.
         welcomeWC = WelcomeWindowController(controller: self, onDone: { [weak self] in
             self?.welcomeWC?.window?.performClose(nil)
@@ -951,7 +1103,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     func prepareForTermination() {
         countdown?.cancel()
         state.recordingCountdownActive = false
-        if player.isPlaying { player.stop() }
+        if player.isPlaying || playbackPending { stopPlayback() }
         if recorder.isRecording {
             recorder.stopRecording()
             if recorder.eventCount > 0 {
@@ -961,16 +1113,32 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             persistCurrentMacroIfNeeded()
         }
         library.save()
+        library.flushSaves()
     }
 
     func openAccessibilityPrefs() {
+        stopPlaybackBeforePresenting("System Settings")
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }
     }
 
     func openInputMonitoringPrefs() {
+        stopPlaybackBeforePresenting("System Settings")
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    func showAbout() {
+        stopPlaybackBeforePresenting("About")
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(nil)
+    }
+
+    func showHelp() {
+        stopPlaybackBeforePresenting("Help")
+        if let url = URL(string: "https://github.com/Aaru1801/TinyTask-macOS#readme") {
             NSWorkspace.shared.open(url)
         }
     }

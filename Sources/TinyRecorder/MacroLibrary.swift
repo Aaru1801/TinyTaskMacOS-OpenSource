@@ -1,8 +1,17 @@
 import Foundation
 import Combine
 
+/// Finite repetition is intentionally bounded; truly unbounded automation uses
+/// the explicit continuous (0/∞) mode. This also keeps ETA/math/UI formatting
+/// safe for hand-edited or hostile macro files.
+let maximumFiniteLoopCount = 1_000_000
+
+func normalizedLoopCount(_ loops: Int) -> Int {
+    loops <= 0 ? 0 : min(maximumFiniteLoopCount, loops)
+}
+
 /// A saved macro entry in the library.
-struct SavedMacro: Codable, Identifiable, Equatable {
+struct SavedMacro: Codable, Identifiable, Equatable, Sendable {
     var id: UUID
     var name: String
     var events: [RecordedEvent]
@@ -74,7 +83,7 @@ struct SavedMacro: Codable, Identifiable, Equatable {
         self.createdAt = createdAt
         self.modifiedAt = modifiedAt
         self.version = version
-        self.loops = loops
+        self.loops = normalizedLoopCount(loops)
         self.speed = speed
         self.icon = icon
         self.accent = accent
@@ -96,7 +105,7 @@ struct SavedMacro: Codable, Identifiable, Equatable {
         self.createdAt = try c.decode(Date.self, forKey: .createdAt)
         self.modifiedAt = try c.decode(Date.self, forKey: .modifiedAt)
         self.version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 3
-        self.loops = try c.decodeIfPresent(Int.self, forKey: .loops) ?? 1
+        self.loops = normalizedLoopCount(try c.decodeIfPresent(Int.self, forKey: .loops) ?? 1)
         self.speed = try c.decodeIfPresent(Double.self, forKey: .speed) ?? 1.0
         self.icon = try c.decodeIfPresent(String.self, forKey: .icon)
         self.accent = try c.decodeIfPresent(String.self, forKey: .accent)
@@ -144,7 +153,7 @@ enum LibraryFilter: Hashable {
 }
 
 /// On-disk representation of the whole library.
-private struct LibraryData: Codable {
+private struct LibraryData: Codable, Sendable {
     var macros: [SavedMacro]
     var currentMacroID: UUID?
     var version: Int = 2
@@ -153,7 +162,15 @@ private struct LibraryData: Codable {
 /// The user's saved macros. Auto-persists to Application Support.
 final class MacroLibrary: ObservableObject {
     @Published private(set) var macros: [SavedMacro] = []
-    @Published var currentMacroID: UUID?
+    @Published var currentMacroID: UUID? = nil {
+        didSet {
+            if let id = currentMacroID {
+                UserDefaults.standard.set(id.uuidString, forKey: Self.currentMacroDefaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.currentMacroDefaultsKey)
+            }
+        }
+    }
 
     var currentMacro: SavedMacro? {
         guard let id = currentMacroID else { return nil }
@@ -166,14 +183,24 @@ final class MacroLibrary: ObservableObject {
         return set.sorted()
     }
 
+    private static let currentMacroDefaultsKey = "library.currentMacroID"
+
     private static var fileURL: URL {
         let base = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first!
             .appendingPathComponent("TinyRecorder", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        // Macros can contain typed text and screen coordinates. Keep both the
+        // directory and file private even on machines with a permissive umask.
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: base.path
+        )
         return base.appendingPathComponent("library.json")
     }
+
+    private let persistenceWriter = LibraryPersistenceWriter()
 
     /// False when a library.json exists on disk that we could not read or decode.
     /// While false, save() refuses to run so we never overwrite the user's only
@@ -214,11 +241,17 @@ final class MacroLibrary: ObservableObject {
             var macro = macro
             macro.events = RecordedEvent.normalized(macro.events)
             macro.speed = max(0.1, min(10.0, macro.speed))
+            macro.loops = normalizedLoopCount(macro.loops)
             return macro
         }
-        self.currentMacroID = decoded.currentMacroID.flatMap { id in
+        let diskSelection = decoded.currentMacroID.flatMap { id in
             macros.contains(where: { $0.id == id }) ? id : nil
         }
+        let preferredSelection = UserDefaults.standard
+            .string(forKey: Self.currentMacroDefaultsKey)
+            .flatMap(UUID.init(uuidString:))
+            .flatMap { id in macros.contains(where: { $0.id == id }) ? id : nil }
+        self.currentMacroID = preferredSelection ?? diskSelection
         loadedCleanly = true
     }
 
@@ -227,11 +260,14 @@ final class MacroLibrary: ObservableObject {
             NSLog("TinyRecorder: skipping save to avoid overwriting an unreadable library.json.")
             return
         }
-        let data = LibraryData(macros: macros, currentMacroID: currentMacroID)
-        let enc = JSONEncoder()
-        enc.outputFormatting = [.prettyPrinted]
-        guard let encoded = try? enc.encode(data) else { return }
-        try? encoded.write(to: Self.fileURL, options: .atomic)
+        let snapshot = LibraryData(macros: macros, currentMacroID: currentMacroID)
+        persistenceWriter.enqueue(snapshot, to: Self.fileURL)
+    }
+
+    /// Wait for queued atomic writes during application termination. Normal UI
+    /// mutations remain non-blocking; Cmd-Q still guarantees durable storage.
+    func flushSaves() {
+        persistenceWriter.flush()
     }
 
     // MARK: - Mutations
@@ -241,6 +277,7 @@ final class MacroLibrary: ObservableObject {
         var macro = macro
         macro.events = RecordedEvent.normalized(macro.events)
         macro.speed = max(0.1, min(10.0, macro.speed))
+        macro.loops = normalizedLoopCount(macro.loops)
         macros.insert(macro, at: 0)
         currentMacroID = macro.id
         save()
@@ -262,7 +299,7 @@ final class MacroLibrary: ObservableObject {
     }
 
     func setLoops(id: UUID, loops: Int) {
-        mutate(id) { $0.loops = max(0, loops) }
+        mutate(id) { $0.loops = normalizedLoopCount(loops) }
     }
 
     func setSpeed(id: UUID, speed: Double) {
@@ -403,7 +440,6 @@ final class MacroLibrary: ObservableObject {
 
     func select(id: UUID) {
         currentMacroID = id
-        save()
     }
 
     /// Atomically increment play stats.
@@ -453,6 +489,63 @@ final class MacroLibrary: ObservableObject {
         let f = DateFormatter()
         f.dateFormat = "MMM d · HH:mm"
         return "Macro " + f.string(from: Date())
+    }
+}
+
+/// A single serial writer preserves mutation order while keeping JSON encoding
+/// and disk I/O away from the main thread. Snapshots are value types, so later UI
+/// edits cannot mutate an in-flight save.
+private final class LibraryPersistenceWriter: @unchecked Sendable {
+    private let queue = DispatchQueue(
+        label: "com.tinyrecorder.library-writer",
+        qos: .utility
+    )
+    private let pendingLock = NSLock()
+    private var pending: (snapshot: LibraryData, url: URL)?
+    private var drainScheduled = false
+
+    func enqueue(_ snapshot: LibraryData, to url: URL) {
+        pendingLock.lock()
+        pending = (snapshot, url)
+        guard !drainScheduled else {
+            pendingLock.unlock()
+            return
+        }
+        drainScheduled = true
+        pendingLock.unlock()
+
+        queue.async { [self] in drain() }
+    }
+
+    /// Keep only the newest snapshot while a large library is being encoded.
+    /// Rapid edits therefore cost at most the active write plus one final write,
+    /// rather than building an unbounded queue of stale full-library snapshots.
+    private func drain() {
+        while true {
+            pendingLock.lock()
+            guard let job = pending else {
+                drainScheduled = false
+                pendingLock.unlock()
+                return
+            }
+            pending = nil
+            pendingLock.unlock()
+
+            do {
+                let encoded = try JSONEncoder().encode(job.snapshot)
+                try encoded.write(to: job.url, options: .atomic)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o600],
+                    ofItemAtPath: job.url.path
+                )
+            } catch {
+                NSLog("TinyRecorder: could not save library: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func flush() {
+        queue.sync { }
     }
 }
 

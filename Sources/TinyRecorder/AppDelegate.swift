@@ -11,7 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menuBar = MenuBarController()
         menuBar.state.refreshPermissions()
-        menuBar.showMainWindowHandler = { [weak self] in self?.showMainWindow(nil) }
+        menuBar.showMainWindowHandler = { [weak self] in self?.presentMainWindow() }
         // Honor the saved Dock vs menu-bar-only preference.
         menuBar.applyAppearanceMode()
 
@@ -22,7 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             promptForAccessibilityIfNeeded()
             // In menu-bar-only mode, launch quietly to the status item — no window.
             if !menuBar.state.menuBarOnly {
-                showMainWindow(nil)
+                menuBar.showMainWindow()
             }
         }
     }
@@ -39,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Bring the main window back when the user clicks the dock icon.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
-            showMainWindow(nil)
+            menuBar.showMainWindow()
         }
         return true
     }
@@ -49,7 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for url in urls {
             menuBar?.importMacro(at: url)
         }
-        showMainWindow(nil)
+        menuBar.showMainWindow()
     }
 
     private func promptForAccessibilityIfNeeded() {
@@ -61,19 +61,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Main window
 
     @objc func showMainWindow(_ sender: Any?) {
+        menuBar?.showMainWindow()
+    }
+
+    private func presentMainWindow() {
         if mainWindow == nil {
             mainWindow = MainWindowController(controller: menuBar)
         }
         mainWindow?.show()
     }
 
-    /// The library advertises ⌘K; wire it through the responder chain so it
+    /// The library advertises ⌘F; wire it through the responder chain so it
     /// reliably focuses the SwiftUI search field in the Dock window.
     @objc func focusLibrarySearch(_ sender: Any?) {
-        showMainWindow(nil)
+        menuBar.showMainWindow()
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: MenuBarController.focusSearchNotification, object: nil)
         }
+    }
+
+    @objc func showQuickRun(_ sender: Any?) {
+        menuBar?.presentQuickRun()
     }
 
     // MARK: - File menu actions
@@ -115,9 +123,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func showHelp(_ sender: Any?) {
-        if let url = URL(string: "https://github.com/Aaru1801/TinyTask-macOS#readme") {
-            NSWorkspace.shared.open(url)
-        }
+        menuBar?.showHelp()
+    }
+
+    @objc func showAbout(_ sender: Any?) {
+        menuBar?.showAbout()
     }
 
     // MARK: - Menu bar (top of screen)
@@ -128,11 +138,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // — App menu —
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(NSMenuItem(
+        let about = NSMenuItem(
             title: "About TinyRecorder",
-            action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+            action: #selector(showAbout(_:)),
             keyEquivalent: ""
-        ))
+        )
+        about.target = self
+        appMenu.addItem(about)
         appMenu.addItem(.separator())
         let prefs = NSMenuItem(
             title: "Settings…",
@@ -190,7 +202,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         expText.target = self
         fileMenu.addItem(expText)
         fileMenu.addItem(.separator())
-        let search = NSMenuItem(title: "Search Library", action: #selector(focusLibrarySearch(_:)), keyEquivalent: "k")
+        let quickRun = NSMenuItem(title: "Quick Run…", action: #selector(showQuickRun(_:)), keyEquivalent: "k")
+        quickRun.target = self
+        fileMenu.addItem(quickRun)
+        let search = NSMenuItem(title: "Search Library", action: #selector(focusLibrarySearch(_:)), keyEquivalent: "f")
         search.target = self
         fileMenu.addItem(search)
         fileMenu.addItem(.separator())
