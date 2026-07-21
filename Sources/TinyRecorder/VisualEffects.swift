@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Brand design tokens (ported from the Claude Design system)
+// MARK: - Brand design tokens
 
 enum Brand {
     // Signature red — richer, more confident (rec scale)

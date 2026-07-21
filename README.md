@@ -19,7 +19,7 @@ Unzip `TinyRecorder-1.9.0.zip`, drag TinyRecorder into `/Applications`, and laun
 
 ## What's in 1.7 — "Design system"
 
-Implemented the Claude Design redesign as a shared design system:
+Introduced a cohesive native design system across every surface:
 - 🎨 **Signal palette** — events are colored by kind everywhere (key=blue, click=green, scroll=teal, drag=violet, right-click=amber, move=gray), turning every waveform into something you can read at a glance.
 - 🔤 **Refined typography & numerics** — italic-serif "tiny" wordmark, monospaced timestamps/counters, tracked small-caps section labels.
 - ⌨️ **Chiseled keycaps** (with a glass variant on the HUD) and a **pulsing record dot**.
