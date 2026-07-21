@@ -2,6 +2,12 @@ import Cocoa
 import CoreGraphics
 import Combine
 
+/// Builds tap masks one event at a time so older Swift compilers do not need to
+/// type-check a long chain of integer shifts as a single expression.
+private func eventMaskBit(_ type: CGEventType) -> CGEventMask {
+    CGEventMask(1) << type.rawValue
+}
+
 /// Captures live mouse + keyboard events into an in-memory macro using a CGEventTap.
 final class Recorder: ObservableObject {
     struct CaptureStats {
@@ -139,20 +145,20 @@ final class Recorder: ObservableObject {
         guard !isRecording else { return true }
 
         let mask: CGEventMask =
-            (1 << CGEventType.leftMouseDown.rawValue)     |
-            (1 << CGEventType.leftMouseUp.rawValue)       |
-            (1 << CGEventType.rightMouseDown.rawValue)    |
-            (1 << CGEventType.rightMouseUp.rawValue)      |
-            (1 << CGEventType.mouseMoved.rawValue)        |
-            (1 << CGEventType.leftMouseDragged.rawValue)  |
-            (1 << CGEventType.rightMouseDragged.rawValue) |
-            (1 << CGEventType.keyDown.rawValue)           |
-            (1 << CGEventType.keyUp.rawValue)             |
-            (1 << CGEventType.flagsChanged.rawValue)      |
-            (1 << CGEventType.scrollWheel.rawValue)       |
-            (1 << CGEventType.otherMouseDown.rawValue)    |
-            (1 << CGEventType.otherMouseUp.rawValue)      |
-            (1 << CGEventType.otherMouseDragged.rawValue)
+            eventMaskBit(.leftMouseDown)     |
+            eventMaskBit(.leftMouseUp)       |
+            eventMaskBit(.rightMouseDown)    |
+            eventMaskBit(.rightMouseUp)      |
+            eventMaskBit(.mouseMoved)        |
+            eventMaskBit(.leftMouseDragged)  |
+            eventMaskBit(.rightMouseDragged) |
+            eventMaskBit(.keyDown)           |
+            eventMaskBit(.keyUp)             |
+            eventMaskBit(.flagsChanged)      |
+            eventMaskBit(.scrollWheel)       |
+            eventMaskBit(.otherMouseDown)    |
+            eventMaskBit(.otherMouseUp)      |
+            eventMaskBit(.otherMouseDragged)
 
         let callback: CGEventTapCallBack = { _, type, event, refcon in
             guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
